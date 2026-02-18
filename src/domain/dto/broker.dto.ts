@@ -9,10 +9,16 @@ export interface CreateBrokerCompanyDto {
   city: string;
   postcode: string;
   country: string;
+  employeeCount?: number;
   phone?: string;
   email?: string;
   website?: string;
   transEuId?: string;
+  transEuPaidOnTime?: number;
+  transEuPaidWithDelay?: number;
+  transEuPaymentIssues?: number;
+  transEuRating?: string;
+  transEuReviewCount?: number;
   insuranceCoverage?: number;
   insuranceProvider?: string;
   insuranceValidUntil?: string;

@@ -1,19 +1,35 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { DndProvider } from 'react-dnd';
-import { HTML5Backend } from 'react-dnd-html5-backend';
-import { ZoomIn, ZoomOut, Maximize, Upload, Settings, Bell, User, Link, Unlink, Eye } from 'lucide-react';
-import { CanvasLoadCard, type CanvasLoad } from './components/CanvasLoadCard';
-import { CanvasRouteSummaryCard, type CanvasRouteSummary } from './components/CanvasRouteSummaryCard';
-import { SidebarRouteSummaryCard } from './components/SidebarRouteSummaryCard';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import {
+  Upload,
+  Settings,
+  Bell,
+  User,
+  Eye,
+  Copy,
+  ExternalLink,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
+import type { PlannerLoad } from './types/load';
 import { CanvasVanCargo } from './components/CanvasVanCargo';
 import { SidebarStopCard, type SidebarStop } from './components/SidebarStopCard';
 import { UploadModal } from './components/UploadModal';
+import { EditLoadModal } from './components/EditLoadModal';
+import { PalletDetailsModal } from './components/PalletDetailsModal';
+import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { RouteModeToggle } from './components/RouteModeToggle';
 import { SimulationImpactPanel, type SimulationImpact } from './components/SimulationImpactPanel';
-import { StopTimelineBar } from './components/StopTimelineBar';
 import { RouteComparison } from './components/RouteComparison';
 import { VanSelector } from './components/VanSelector';
-import { RouteTabSwitcher } from './components/RouteTabSwitcher';
+import { loadApi } from '../api';
+import type { Load as ApiLoad } from '../domain/entities';
+import {
+  buildLoadUpsertDto,
+  buildPlannerSyncFingerprint,
+  buildSidebarSeedStops,
+  isUuid,
+  mapApiLoadToPlannerLoad,
+} from './planner-api-mapper';
 
 export interface CanvasStop {
   id: string;
@@ -35,10 +51,165 @@ export interface CanvasStop {
   isSimulation?: boolean;
   kmDelta?: number;
   timeDeltaMinutes?: number;
-  isPending?: boolean; // Flag for stops awaiting confirmation
 }
 
-const initialLoads: CanvasLoad[] = [
+type OrganizerStatus = 'ON BOARD' | 'NEGOTIATING' | 'TAKEN';
+type MiddleWorkspaceTab = 'load-planner' | 'maps';
+type TranseuLinkField = 'originTranseuLink' | 'destTranseuLink';
+
+const ORGANIZER_STATUSES: OrganizerStatus[] = [
+  'ON BOARD',
+  'NEGOTIATING',
+  'TAKEN',
+];
+
+interface PalletDimensions {
+  width: number;
+  height: number;
+  weightKg?: number;
+}
+
+interface LoadExtraStop {
+  address: string;
+  pallets: number;
+  action: 'pickup' | 'dropoff';
+}
+
+const createDefaultPalletDimensions = (count: number): PalletDimensions[] =>
+  Array.from({ length: Math.max(0, count) }, () => ({
+    width: 120,
+    height: 80,
+  }));
+
+const ensureLoadPalletDimensions = (load: PlannerLoad): PalletDimensions[] => {
+  const current = load.palletDimensions ?? [];
+  if (current.length >= load.pallets) {
+    return current.slice(0, load.pallets);
+  }
+
+  return [
+    ...current,
+    ...createDefaultPalletDimensions(load.pallets - current.length),
+  ];
+};
+
+const ensureLoadExtraStops = (load: PlannerLoad): LoadExtraStop[] =>
+  (load.extraStops ?? []).map((extraStop) => {
+    if (typeof extraStop === 'string') {
+      return {
+        address: extraStop,
+        pallets: 1,
+        action: 'dropoff',
+      };
+    }
+
+    return {
+      address: extraStop.address ?? '',
+      pallets: Math.max(0, Math.round(extraStop.pallets ?? 0)),
+      action: extraStop.action === 'pickup' ? 'pickup' : 'dropoff',
+    };
+  });
+
+const clonePlannerLoad = (load: PlannerLoad): PlannerLoad => ({
+  ...load,
+  palletDimensions: load.palletDimensions
+    ? load.palletDimensions.map((pallet) => ({ ...pallet }))
+    : undefined,
+  extraStops: load.extraStops
+    ? load.extraStops.map((stop) => (typeof stop === 'string' ? stop : { ...stop }))
+    : undefined,
+});
+
+const upsertPlannerLoad = (
+  existingLoads: PlannerLoad[],
+  incomingLoad: PlannerLoad,
+): PlannerLoad[] => {
+  const nextLoad = clonePlannerLoad(incomingLoad);
+  const existingIndex = existingLoads.findIndex((load) => load.id === incomingLoad.id);
+  if (existingIndex === -1) {
+    return [nextLoad, ...existingLoads];
+  }
+
+  return existingLoads.map((load, index) => (index === existingIndex ? nextLoad : load));
+};
+
+const extractPostcode = (address?: string): string => {
+  const match = address?.match(/\b\d{5}\b/);
+  return match?.[0] ?? '00000';
+};
+
+const parseEtaDisplay = (eta: string, fallbackDate?: string) => {
+  const trimmed = eta.trim();
+  if (!trimmed) {
+    return {
+      date: fallbackDate ?? '—',
+      time: '—',
+    };
+  }
+
+  const dateTimeMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2})/);
+  if (dateTimeMatch) {
+    return {
+      date: dateTimeMatch[1],
+      time: dateTimeMatch[2],
+    };
+  }
+
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+  if (isDateOnly) {
+    return {
+      date: trimmed,
+      time: '—',
+    };
+  }
+
+  const isTimeOnly = /^\d{1,2}:\d{2}$/.test(trimmed);
+  if (isTimeOnly) {
+    return {
+      date: fallbackDate ?? '—',
+      time: trimmed,
+    };
+  }
+
+  return {
+    date: fallbackDate ?? trimmed,
+    time: '—',
+  };
+};
+
+const formatDateTimePoint = (dateValue?: string, timeHint?: string) => {
+  const dateParsed = parseEtaDisplay(dateValue ?? '');
+  const hintParsed = parseEtaDisplay(timeHint ?? '', dateParsed.date !== '—' ? dateParsed.date : undefined);
+
+  const date =
+    dateParsed.date && dateParsed.date !== '—'
+      ? dateParsed.date
+      : hintParsed.date || '—';
+  const time =
+    dateParsed.time !== '—'
+      ? dateParsed.time
+      : hintParsed.time !== '—'
+        ? hintParsed.time
+        : '—';
+
+  return `${date} ${time}`;
+};
+
+const formatDateTimeRange = (
+  startDateValue?: string,
+  endDateValue?: string,
+  startTimeHint?: string,
+) => {
+  const startPoint = formatDateTimePoint(startDateValue, startTimeHint);
+  if (!endDateValue) {
+    return startPoint;
+  }
+
+  const endPoint = formatDateTimePoint(endDateValue);
+  return `${startPoint} - ${endPoint}`;
+};
+
+const initialLoads: PlannerLoad[] = [
   {
     id: 'L001',
     brokerage: 'Hamburg Logistics GmbH',
@@ -97,6 +268,12 @@ const initialLoads: CanvasLoad[] = [
     y: 500,
   },
 ];
+
+const normalizedInitialLoads: PlannerLoad[] = initialLoads.map((load) => ({
+  ...load,
+  palletDimensions: ensureLoadPalletDimensions(load),
+  extraStops: ensureLoadExtraStops(load),
+}));
 
 const initialStops: CanvasStop[] = [
   // L001 - ON BOARD
@@ -207,15 +384,11 @@ const initialStops: CanvasStop[] = [
 ];
 
 export default function App() {
-  const [loads, setLoads] = useState<CanvasLoad[]>(initialLoads);
+  const [loads, setLoads] = useState<PlannerLoad[]>(normalizedInitialLoads);
   const [stops, setStops] = useState<CanvasStop[]>(initialStops);
-  const [pendingStops, setPendingStops] = useState<CanvasStop[]>([]); // Stops waiting for confirmation
   const [selectedStops, setSelectedStops] = useState<string[]>([]);
-  const [groupCounter, setGroupCounter] = useState(1);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [loadToAddToCargo, setLoadToAddToCargo] = useState<CanvasLoad | null>(null);
   const [loadedCargoIds, setLoadedCargoIds] = useState<string[]>([]); // Track which loads are in cargo
-  const [isRouteSummaryDocked, setIsRouteSummaryDocked] = useState(false); // Track if route summary is docked
 
   // Simulation Mode State
   const [routeMode, setRouteMode] = useState<'active' | 'simulation'>('active');
@@ -227,260 +400,382 @@ export default function App() {
     warnings: ['Pushes Stop 4 by +45m', '12 cm overflow at Stop 3'],
   });
   const [selectedCargoStopId, setSelectedCargoStopId] = useState('S001'); // For cargo timeline
-  
-  const [routeSummary, setRouteSummary] = useState<CanvasRouteSummary>({
-    id: 'RS001',
-    totalKm: 525,
-    totalTime: '8h 30m',
-    oldRouteKm: 612,
-    estimatedFuel: 189,
-    estimatedMargin: 1450,
-    x: 1400,
-    y: 100,
-  });
-  const [vanCargoPosition, setVanCargoPosition] = useState({ x: 100, y: 800 });
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  const [selectedVan, setSelectedVan] = useState('VAN1');
-  const [isSpacePressed, setIsSpacePressed] = useState(false);
-  const canvasRef = useRef<HTMLDivElement>(null);
+  const [selectedVan, setSelectedVan] = useState('');
+  const [organizerVanCargoPosition, setOrganizerVanCargoPosition] = useState({ x: 24, y: 24 });
+  const [middleWorkspaceTab, setMiddleWorkspaceTab] = useState<MiddleWorkspaceTab>('load-planner');
+  const [draggingSidebarStopIndex, setDraggingSidebarStopIndex] = useState<number | null>(null);
+  const [draggingLoadId, setDraggingLoadId] = useState<string | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<OrganizerStatus | null>(null);
+  const [isInactiveModalOpen, setIsInactiveModalOpen] = useState(false);
+  const [editingLoadId, setEditingLoadId] = useState<string | null>(null);
+  const [editingPalletLoadId, setEditingPalletLoadId] = useState<string | null>(null);
+  const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
+  const [copiedIndicatorKey, setCopiedIndicatorKey] = useState<string | null>(null);
+  const [isApiConnected, setIsApiConnected] = useState(false);
+  const [isPlannerHydrated, setIsPlannerHydrated] = useState(false);
+  const [isSavingPlanner, setIsSavingPlanner] = useState(false);
+  const [lastPlannerSyncError, setLastPlannerSyncError] = useState<string | null>(null);
+  const plannerSyncTimerRef = useRef<number | null>(null);
+  const plannerLastSyncedFingerprintRef = useRef<string>('');
 
-  // Route Variant Management
-  interface RouteVariant {
-    id: string;
-    name: string;
-    savedAt: string;
-    stops: CanvasStop[];
-    loadedCargoIds: string[];
-    selectedVan: string;
-    loads: CanvasLoad[]; // Each variant has its own copy of loads
-  }
-  const [activeRouteTab, setActiveRouteTab] = useState('current');
-  const [routeVariants, setRouteVariants] = useState<RouteVariant[]>([
-    {
-      id: 'variant-1',
-      name: 'V1',
-      savedAt: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      stops: [],
-      loadedCargoIds: [],
-      selectedVan: 'VAN1',
-      loads: JSON.parse(JSON.stringify(initialLoads)), // Deep copy
-    },
-    {
-      id: 'variant-2',
-      name: 'V2',
-      savedAt: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      stops: [],
-      loadedCargoIds: [],
-      selectedVan: 'VAN1',
-      loads: JSON.parse(JSON.stringify(initialLoads)), // Deep copy
-    },
-  ]);
-  const [currentRouteState, setCurrentRouteState] = useState({
-    stops: initialStops,
-    loadedCargoIds: [] as string[],
-    loads: initialLoads, // Current Route's load state
-  });
-
-  // Save current route as a variant
-  const handleSaveRouteVariant = () => {
-    const variantNumber = routeVariants.length + 1;
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    
-    const newVariant: RouteVariant = {
-      id: `variant-${Date.now()}`,
-      name: `V${variantNumber}`,
-      savedAt: timeString,
-      stops: [...stops],
-      loadedCargoIds: [...loadedCargoIds],
-      selectedVan: selectedVan,
-      loads: JSON.parse(JSON.stringify(loads)), // Deep copy
-    };
-    
-    setRouteVariants(prev => [...prev, newVariant]);
-  };
-
-  // Switch between Current Route and Variants
-  const handleRouteTabChange = (tabId: string) => {
-    if (tabId === activeRouteTab) return;
-
-    // Save current state before switching
-    if (activeRouteTab === 'current') {
-      setCurrentRouteState({
-        stops: [...stops],
-        loadedCargoIds: [...loadedCargoIds],
-        loads: JSON.parse(JSON.stringify(loads)), // Deep copy to preserve state
-      });
-    } else {
-      // Save to variant with loads state
-      setRouteVariants(prev => prev.map(v => 
-        v.id === activeRouteTab 
-          ? { 
-              ...v, 
-              stops: [...stops], 
-              loadedCargoIds: [...loadedCargoIds], 
-              selectedVan,
-              loads: JSON.parse(JSON.stringify(loads)) // Deep copy
-            }
-          : v
-      ));
+  const hasAnyPlannerVanAssignment = useMemo(
+    () => loads.some((load) => Boolean(load.plannerVanId)),
+    [loads],
+  );
+  const visiblePlannerLoads = useMemo(() => {
+    if (!hasAnyPlannerVanAssignment) {
+      return loads;
     }
+    if (!selectedVan) {
+      return loads.filter((load) => Boolean(load.plannerVanId));
+    }
+    return loads.filter((load) => load.plannerVanId === selectedVan);
+  }, [hasAnyPlannerVanAssignment, loads, selectedVan]);
 
-    // Load new state
-    if (tabId === 'current') {
-      setStops(currentRouteState.stops);
-      setLoadedCargoIds(currentRouteState.loadedCargoIds);
-      setLoads(currentRouteState.loads);
-    } else {
-      const variant = routeVariants.find(v => v.id === tabId);
-      if (variant) {
-        setStops(variant.stops);
-        setLoadedCargoIds(variant.loadedCargoIds);
-        setSelectedVan(variant.selectedVan);
-        setLoads(variant.loads);
+  useEffect(() => {
+    if (!selectedLoadId) return;
+    const isStillVisible = visiblePlannerLoads.some((load) => load.id === selectedLoadId);
+    if (!isStillVisible) {
+      setSelectedLoadId(null);
+      setSelectedStops([]);
+    }
+  }, [selectedLoadId, visiblePlannerLoads]);
+
+  const buildCanvasStopsFromApiLoads = useCallback(
+    (apiLoads: ApiLoad[], plannerLoads: PlannerLoad[]): CanvasStop[] => {
+      const seedStops = buildSidebarSeedStops(apiLoads, plannerLoads);
+
+      return seedStops.map((seed, index) => ({
+        id: `S-${seed.loadId}-${seed.type}`,
+        number: index + 1,
+        type: seed.type,
+        city: seed.city,
+        postcode: seed.postcode,
+        eta: seed.eta,
+        distanceToNext: 0,
+        drivingTime: '—',
+        timeWindowViolation: false,
+        color: seed.color,
+        loadId: seed.loadId,
+        pallets: seed.pallets,
+        weight: seed.weight,
+        x: 1100,
+        y: 100 + index * 180,
+      }));
+    },
+    [],
+  );
+
+  const appendPlannerStopsForLoad = useCallback(
+    (
+      existingStops: CanvasStop[],
+      apiLoad: ApiLoad,
+      plannerLoad: PlannerLoad,
+    ): CanvasStop[] => {
+      if (existingStops.some((stop) => stop.loadId === plannerLoad.id)) {
+        return existingStops;
       }
-    }
 
-    setActiveRouteTab(tabId);
-  };
+      const generatedStops = buildCanvasStopsFromApiLoads([apiLoad], [plannerLoad]);
+      if (generatedStops.length === 0) {
+        return existingStops;
+      }
 
-  // Delete a route variant
-  const handleDeleteRouteVariant = (variantId: string) => {
-    setRouteVariants(prev => prev.filter(v => v.id !== variantId));
-    if (activeRouteTab === variantId) {
-      setActiveRouteTab('current');
-      setStops(currentRouteState.stops);
-      setLoadedCargoIds(currentRouteState.loadedCargoIds);
-      setLoads(currentRouteState.loads);
-    }
-  };
+      const nextStopNumber =
+        existingStops.reduce((max, stop) => Math.max(max, stop.number), 0) + 1;
 
-  // Rename a route variant
-  const handleRenameRouteVariant = (variantId: string, newName: string) => {
-    setRouteVariants(prev => prev.map(v => 
-      v.id === variantId ? { ...v, name: newName } : v
-    ));
-  };
+      const normalizedStops = generatedStops.map((stop, index) => {
+        const number = nextStopNumber + index;
+        return {
+          ...stop,
+          number,
+          x: 1100,
+          y: 100 + (number - 1) * 180,
+        };
+      });
 
-  // Duplicate a route variant
-  const handleDuplicateVariant = (variantId: string) => {
-    const variant = routeVariants.find(v => v.id === variantId);
-    if (!variant) return;
+      return [...existingStops, ...normalizedStops];
+    },
+    [buildCanvasStopsFromApiLoads],
+  );
 
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    
-    // Find next available number for naming
-    const existingNumbers = routeVariants
-      .map(v => {
-        const match = v.name.match(/^V(\d+)$/);
-        return match ? parseInt(match[1]) : 0;
-      })
-      .filter(n => n > 0);
-    const nextNumber = Math.max(...existingNumbers, 0) + 1;
+  const handleFreightCreated = useCallback(
+    (createdLoad: ApiLoad) => {
+      const mappedLoad = mapApiLoadToPlannerLoad(createdLoad);
 
-    const duplicatedVariant: RouteVariant = {
-      id: `variant-${Date.now()}`,
-      name: `V${nextNumber}`,
-      savedAt: timeString,
-      stops: [...variant.stops],
-      loadedCargoIds: [...variant.loadedCargoIds],
-      selectedVan: variant.selectedVan,
-      loads: JSON.parse(JSON.stringify(variant.loads)), // Deep copy
+      setLoads((prev) => upsertPlannerLoad(prev, mappedLoad));
+      setStops((prev) => appendPlannerStopsForLoad(prev, createdLoad, mappedLoad));
+    },
+    [appendPlannerStopsForLoad],
+  );
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const hydratePlanner = async () => {
+      try {
+        const initialResponse = await loadApi.getAll({ limit: 200, offset: 0 });
+        let apiLoads = initialResponse.data;
+
+        if (apiLoads.length === 0) {
+          for (const seedLoad of normalizedInitialLoads) {
+            await loadApi.create(buildLoadUpsertDto(seedLoad));
+          }
+          const seededResponse = await loadApi.getAll({ limit: 200, offset: 0 });
+          apiLoads = seededResponse.data;
+        }
+
+        if (isCancelled) return;
+
+        const plannerLoads = apiLoads.map(mapApiLoadToPlannerLoad);
+        const plannerStops = buildCanvasStopsFromApiLoads(apiLoads, plannerLoads);
+
+        setLoads(plannerLoads);
+        setStops(plannerStops);
+        setSelectedStops([]);
+        setSelectedLoadId(null);
+        setEditingLoadId(null);
+        setLoadedCargoIds([]);
+        setSelectedCargoStopId(plannerStops[0]?.id ?? '');
+
+        plannerLastSyncedFingerprintRef.current = buildPlannerSyncFingerprint(plannerLoads);
+        setIsApiConnected(true);
+        setLastPlannerSyncError(null);
+      } catch (error) {
+        console.error('Failed to hydrate planner loads from API', error);
+        if (!isCancelled) {
+          setIsApiConnected(false);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsPlannerHydrated(true);
+        }
+      }
     };
 
-    setRouteVariants(prev => [...prev, duplicatedVariant]);
-  };
+    void hydratePlanner();
 
-  // Duplicate Current Route
-  const handleDuplicateCurrent = () => {
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    
-    // Find next available number for naming
-    const existingNumbers = routeVariants
-      .map(v => {
-        const match = v.name.match(/^V(\d+)$/);
-        return match ? parseInt(match[1]) : 0;
-      })
-      .filter(n => n > 0);
-    const nextNumber = Math.max(...existingNumbers, 0) + 1;
-
-    const duplicatedVariant: RouteVariant = {
-      id: `variant-${Date.now()}`,
-      name: `V${nextNumber}`,
-      savedAt: timeString,
-      stops: activeRouteTab === 'current' ? [...currentRouteState.stops] : [...stops],
-      loadedCargoIds: activeRouteTab === 'current' ? [...currentRouteState.loadedCargoIds] : [...loadedCargoIds],
-      selectedVan: selectedVan,
-      loads: JSON.parse(JSON.stringify(activeRouteTab === 'current' ? currentRouteState.loads : loads)), // Deep copy
+    return () => {
+      isCancelled = true;
+      if (plannerSyncTimerRef.current !== null) {
+        window.clearTimeout(plannerSyncTimerRef.current);
+        plannerSyncTimerRef.current = null;
+      }
     };
+  }, [buildCanvasStopsFromApiLoads]);
 
-    setRouteVariants(prev => [...prev, duplicatedVariant]);
-  };
+  const syncPlannerLoadsToApi = useCallback(
+    async (loadsToSync: PlannerLoad[]) => {
+      const syncableLoads = loadsToSync.filter((load) => isUuid(load.id));
+      if (!isApiConnected || syncableLoads.length === 0) {
+        return;
+      }
 
-  // Convert stops to sidebar format (combining active and pending for reordering)
-  const combinedStops: CanvasStop[] = [...stops, ...pendingStops];
+      setIsSavingPlanner(true);
+      try {
+        await Promise.all(
+          syncableLoads.map((load) => loadApi.update(load.id, buildLoadUpsertDto(load))),
+        );
+        plannerLastSyncedFingerprintRef.current = buildPlannerSyncFingerprint(loadsToSync);
+        setLastPlannerSyncError(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to sync planner loads';
+        console.error('Planner load sync failed', error);
+        setLastPlannerSyncError(message);
+      } finally {
+        setIsSavingPlanner(false);
+      }
+    },
+    [isApiConnected],
+  );
+
+  const plannerSyncFingerprint = useMemo(() => buildPlannerSyncFingerprint(loads), [loads]);
+
+  useEffect(() => {
+    if (!isApiConnected || !isPlannerHydrated) {
+      return;
+    }
+    if (plannerSyncFingerprint === plannerLastSyncedFingerprintRef.current) {
+      return;
+    }
+
+    if (plannerSyncTimerRef.current !== null) {
+      window.clearTimeout(plannerSyncTimerRef.current);
+    }
+
+    const loadsSnapshot = loads;
+    plannerSyncTimerRef.current = window.setTimeout(() => {
+      void syncPlannerLoadsToApi(loadsSnapshot);
+    }, 700);
+
+    return () => {
+      if (plannerSyncTimerRef.current !== null) {
+        window.clearTimeout(plannerSyncTimerRef.current);
+        plannerSyncTimerRef.current = null;
+      }
+    };
+  }, [
+    isApiConnected,
+    isPlannerHydrated,
+    loads,
+    plannerSyncFingerprint,
+    syncPlannerLoadsToApi,
+  ]);
+
+  // Convert stops to sidebar format
+  const combinedStops: CanvasStop[] = stops;
   
-  // Filter stops based on active tab
-  const filteredStops = activeRouteTab === 'current'
-    ? combinedStops.filter(stop => {
-        const load = loads.find(l => l.id === stop.loadId);
-        return load?.status === 'TAKEN';
-      })
-    : combinedStops;
+  // Keep sidebar focused on route-active loads
+  const filteredStops = combinedStops.filter((stop) => {
+    const load = visiblePlannerLoads.find((currentLoad) => currentLoad.id === stop.loadId);
+    if (!load || load.isInactive) return false;
+    return load.status === 'TAKEN' || load.status === 'NEGOTIATING';
+  });
   
   const sidebarStops: SidebarStop[] = filteredStops
-    .map((stop) => ({
-      id: stop.id,
-      number: stop.number,
-      type: stop.type,
-      city: stop.city,
-      postcode: stop.postcode,
-      eta: stop.eta,
-      color: stop.color,
-      loadId: stop.loadId,
-      pallets: stop.pallets,
-      weight: stop.weight,
-      groupId: stop.groupId,
-    }))
+    .map((stop) => {
+      const relatedLoad = visiblePlannerLoads.find((load) => load.id === stop.loadId);
+      const fallbackDate =
+        stop.type === 'pickup' ? relatedLoad?.pickupDate : relatedLoad?.deliveryDate;
+      const { date: etaDate, time: etaTime } = parseEtaDisplay(stop.eta, fallbackDate);
+
+      return {
+        id: stop.id,
+        number: stop.number,
+        type: stop.type,
+        city: stop.city,
+        postcode: stop.postcode,
+        eta: stop.eta,
+        etaDate,
+        etaTime,
+        color: relatedLoad?.color ?? stop.color,
+        loadId: stop.loadId,
+        brokerage: relatedLoad?.brokerage ?? '',
+        locationLine: `DE, ${stop.postcode}, ${stop.city}`,
+        transeuLink:
+          stop.type === 'pickup'
+            ? relatedLoad?.originTranseuLink
+            : relatedLoad?.destTranseuLink,
+        pallets: stop.pallets,
+        weight: stop.weight,
+        distanceToNext: stop.distanceToNext,
+        drivingTime: stop.drivingTime,
+        groupId: stop.groupId,
+      };
+    })
     .sort((a, b) => a.number - b.number); // Sort by number to maintain correct visual order
+
+  const cargoRoutedStops = sidebarStops
+    .flatMap((stop) => {
+      const relatedLoad = visiblePlannerLoads.find((load) => load.id === stop.loadId);
+      const palletDimensions = relatedLoad ? ensureLoadPalletDimensions(relatedLoad) : [];
+      const baseStop = {
+        id: stop.id,
+        number: stop.number,
+        city: stop.city,
+        loadId: stop.loadId,
+        pallets: stop.pallets,
+        palletDimensions,
+        type: stop.type,
+        color: relatedLoad?.color ?? stop.color,
+        label: `${stop.city.substring(0, 3)}-${stop.number}`,
+      } as const;
+
+      if (stop.type !== 'pickup' || !relatedLoad) {
+        return [baseStop];
+      }
+
+      const extraStops = ensureLoadExtraStops(relatedLoad);
+      const extraRouteStops = extraStops.map((extraStop, extraIndex) => ({
+        id: `${stop.id}-extra-${extraIndex}`,
+        number: stop.number + (extraIndex + 1) / 100,
+        city: extraStop.address || `Extra stop ${extraIndex + 1}`,
+        loadId: stop.loadId,
+        pallets: extraStop.pallets,
+        palletDimensions: createDefaultPalletDimensions(extraStop.pallets),
+        type: 'extra' as const,
+        extraAction: extraStop.action,
+        color: relatedLoad?.color ?? stop.color,
+        label: `EX-${extraIndex + 1}`,
+      }));
+
+      return [baseStop, ...extraRouteStops];
+    })
+    .sort((a, b) => a.number - b.number);
+
+  useEffect(() => {
+    if (cargoRoutedStops.length === 0) {
+      if (selectedCargoStopId !== '') {
+        setSelectedCargoStopId('');
+      }
+      return;
+    }
+
+    const hasSelectedStop = cargoRoutedStops.some((stop) => stop.id === selectedCargoStopId);
+    if (!hasSelectedStop) {
+      setSelectedCargoStopId(cargoRoutedStops[0].id);
+    }
+  }, [cargoRoutedStops, selectedCargoStopId]);
+
+  const getLoadIdFromStopId = (stopId: string): string | null => {
+    const visibleStop = sidebarStops.find((stop) => stop.id === stopId);
+    if (visibleStop) return visibleStop.loadId;
+
+    const allStop = combinedStops.find((stop) => stop.id === stopId);
+    return allStop?.loadId ?? null;
+  };
+
+  const deriveSelectedLoadIdFromStops = (stopIds: string[]): string | null => {
+    const relatedLoadIds = Array.from(
+      new Set(
+        stopIds
+          .map((stopId) => getLoadIdFromStopId(stopId))
+          .filter((loadId): loadId is string => loadId !== null),
+      ),
+    );
+
+    return relatedLoadIds.length === 1 ? relatedLoadIds[0] : null;
+  };
+
+  const handleSelectLoad = (loadId: string) => {
+    const relatedStopIds = sidebarStops
+      .filter((stop) => stop.loadId === loadId)
+      .map((stop) => stop.id);
+
+    setSelectedLoadId(loadId);
+    setSelectedStops(relatedStopIds);
+    setEditingLoadId(null);
+
+    if (relatedStopIds.length > 0) {
+      setSelectedCargoStopId(relatedStopIds[0]);
+    }
+  };
+
+  const clearLoadSelection = () => {
+    setSelectedLoadId(null);
+    setSelectedStops([]);
+  };
 
   const handleSelectStop = (id: string, multiSelect: boolean) => {
     if (multiSelect) {
-      setSelectedStops((prev) =>
-        prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id]
-      );
+      setSelectedStops((prev) => {
+        const nextStops = prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id];
+        setSelectedLoadId(deriveSelectedLoadIdFromStops(nextStops));
+        return nextStops;
+      });
     } else {
       setSelectedStops([id]);
+      setSelectedLoadId(getLoadIdFromStopId(id));
     }
   };
 
-  const handleStickStops = () => {
-    if (selectedStops.length < 2) return;
-    
-    const groupId = `group-${groupCounter}`;
-    setStops((prev) =>
-      prev.map((stop) =>
-        selectedStops.includes(stop.id) ? { ...stop, groupId } : stop
-      )
-    );
-    setSelectedStops([]);
-    setGroupCounter((prev) => prev + 1);
-  };
+  const handleSidebarStopTranseuAction = (stopId: string, shouldEdit = false) => {
+    const stop = sidebarStops.find((currentStop) => currentStop.id === stopId);
+    if (!stop) return;
 
-  const handleUnstickStops = () => {
-    if (selectedStops.length === 0) return;
-    
-    setStops((prev) =>
-      prev.map((stop) =>
-        selectedStops.includes(stop.id) ? { ...stop, groupId: undefined } : stop
-      )
-    );
-    setSelectedStops([]);
+    const linkField: TranseuLinkField =
+      stop.type === 'pickup' ? 'originTranseuLink' : 'destTranseuLink';
+    handleTranseuLinkAction(stop.loadId, linkField, shouldEdit);
   };
 
   const handleReorderStops = (fromIndex: number, toIndex: number) => {
@@ -492,162 +787,31 @@ export default function App() {
     // Renumber all stops
     const renumbered = reordered.map((stop, idx) => ({ ...stop, number: idx + 1 }));
     
-    // Update both stops and pending stops with their new numbers
+    // Update active stops with new numbers
     setStops(prev => prev.map(stop => {
       const updated = renumbered.find(r => r.id === stop.id);
       return updated ? { ...stop, number: updated.number } : stop;
     }));
-    
-    setPendingStops(prev => prev.map(stop => {
-      const updated = renumbered.find(r => r.id === stop.id);
-      return updated ? { ...stop, number: updated.number } : stop;
-    }));
   };
 
-  const moveStopWithGroup = (id: string, x: number, y: number) => {
-    setStops((prev) => {
-      const stop = prev.find((s) => s.id === id);
-      if (!stop) return prev;
+  const changeLoadStatus = (id: string, status: PlannerLoad['status']) => {
+    const currentLoad = loads.find((load) => load.id === id);
+    if (!currentLoad || currentLoad.status === status) return;
 
-      const deltaX = x - stop.x;
-      const deltaY = y - stop.y;
-
-      if (stop.groupId) {
-        // Move all stops in the same group
-        return prev.map((s) =>
-          s.groupId === stop.groupId
-            ? { ...s, x: s.x + deltaX, y: s.y + deltaY }
-            : s
-        );
-      } else {
-        // Move just this stop
-        return prev.map((s) => (s.id === id ? { ...s, x, y } : s));
-      }
-    });
-  };
-
-  // Handle space key for panning
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !isSpacePressed) {
-        setIsSpacePressed(true);
-        e.preventDefault();
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        setIsSpacePressed(false);
-        setIsPanning(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, [isSpacePressed]);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setScale((prev) => Math.max(0.1, Math.min(3, prev * delta)));
-    }
-  };
-
-  const handleCanvasMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || isSpacePressed) {
-      setIsPanning(true);
-      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-      e.preventDefault();
-    }
-  };
-
-  const handleCanvasMouseMove = (e: React.MouseEvent) => {
-    if (isPanning) {
-      setPan({
-        x: e.clientX - panStart.x,
-        y: e.clientY - panStart.y,
-      });
-    }
-  };
-
-  const handleCanvasMouseUp = () => {
-    if (!isSpacePressed) {
-      setIsPanning(false);
-    }
-  };
-
-  const moveLoad = (id: string, x: number, y: number) => {
     setLoads((prev) =>
-      prev.map((load) => (load.id === id ? { ...load, x, y } : load))
+      prev.map((load) => (load.id === id ? { ...load, status } : load)),
     );
-  };
 
-  const changeLoadColor = (id: string, color: string) => {
-    setLoads((prev) =>
-      prev.map((load) => (load.id === id ? { ...load, color } : load))
-    );
-  };
+    const isPlannedStatus = (loadStatus: PlannerLoad['status']) =>
+      loadStatus === 'TAKEN' || loadStatus === 'NEGOTIATING';
+    const wasPlanned = isPlannedStatus(currentLoad.status);
+    const isPlanned = isPlannedStatus(status);
 
-  const changeLoadStatus = (id: string, status: CanvasLoad['status']) => {
-    console.log('changeLoadStatus called with id:', id, 'status:', status);
-    setLoads((prev) => {
-      const updated = prev.map((load) => (load.id === id ? { ...load, status } : load));
-      console.log('Loads updated:', updated.find(l => l.id === id));
-      return updated;
-    });
-  };
-
-  const moveStop = (id: string, x: number, y: number) => {
-    setStops((prev) =>
-      prev.map((stop) => (stop.id === id ? { ...stop, x, y } : stop))
-    );
-  };
-
-  const moveRouteContainer = (loadId: string, x: number, y: number) => {
-    setStops((prev) =>
-      prev.map((stop) => {
-        if (stop.loadId === loadId) {
-          if (stop.type === 'pickup') {
-            return { ...stop, x, y };
-          } else {
-            // Keep delivery relative to pickup
-            const pickup = prev.find((s) => s.loadId === loadId && s.type === 'pickup');
-            if (pickup) {
-              const offsetY = stop.y - pickup.y;
-              return { ...stop, x, y: y + offsetY };
-            }
-          }
-        }
-        return stop;
-      })
-    );
-  };
-
-  const moveRouteSummary = (id: string, x: number, y: number) => {
-    setRouteSummary((prev) => ({ ...prev, x, y }));
-  };
-
-  const moveVanCargo = (x: number, y: number) => {
-    setVanCargoPosition({ x, y });
-  };
-
-  const handleZoomIn = () => {
-    setScale((prev) => Math.min(3, prev * 1.2));
-  };
-
-  const handleZoomOut = () => {
-    setScale((prev) => Math.max(0.1, prev / 1.2));
-  };
-
-  const handleZoomReset = () => {
-    setScale(1);
-    setPan({ x: 0, y: 0 });
+    if (isPlanned && !wasPlanned && currentLoad.plannerVanId) {
+      handleLoadToVan({ ...currentLoad, status });
+    } else if (!isPlanned && wasPlanned) {
+      handleRemoveFromVan({ ...currentLoad, status });
+    }
   };
 
   // Simulation Mode Handlers
@@ -674,19 +838,23 @@ export default function App() {
     setRouteMode(mode);
   };
 
-  // Handle Load to Van - creates pending pickup and delivery stops for user to arrange
-  const handleLoadToVan = useCallback((load: CanvasLoad) => {
-    // Check if this load is already in the van or pending (prevent duplicates)
+  // Handle Load to Van - creates pickup and delivery stops immediately
+  const handleLoadToVan = useCallback((load: PlannerLoad) => {
+    if (!load.plannerVanId) return;
+
+    // Check if this load is already in the route (prevent duplicates)
     const alreadyLoaded = stops.some(stop => stop.loadId === load.id);
-    const alreadyPending = pendingStops.some(stop => stop.loadId === load.id);
-    if (alreadyLoaded || alreadyPending) {
+    if (alreadyLoaded) {
       return;
     }
+
+    const nextStopNumber =
+      stops.reduce((max, stop) => Math.max(max, stop.number), 0) + 1;
 
     // Create pickup stop
     const pickupStop: CanvasStop = {
       id: `S-${load.id}-pickup`,
-      number: stops.length + pendingStops.length + 1,
+      number: nextStopNumber,
       type: 'pickup',
       city: load.originCity,
       postcode: load.originAddress?.split(',')[1]?.trim().split(' ')[0] || '00000',
@@ -699,13 +867,13 @@ export default function App() {
       pallets: load.pallets,
       weight: load.weight,
       x: 1100,
-      y: 100 + (stops.length + pendingStops.length) * 180,
+      y: 100 + (nextStopNumber - 1) * 180,
     };
 
     // Create delivery stop
     const deliveryStop: CanvasStop = {
       id: `S-${load.id}-delivery`,
-      number: stops.length + pendingStops.length + 2,
+      number: nextStopNumber + 1,
       type: 'delivery',
       city: load.destCity,
       postcode: load.destAddress?.split(',')[1]?.trim().split(' ')[0] || '00000',
@@ -718,72 +886,473 @@ export default function App() {
       pallets: load.pallets,
       weight: load.weight,
       x: 1100,
-      y: 100 + (stops.length + pendingStops.length + 1) * 180,
+      y: 100 + nextStopNumber * 180,
     };
 
-    // Add to pending stops for user to arrange
-    setPendingStops(prev => [...prev, pickupStop, deliveryStop]);
-  }, [stops, pendingStops]);
+    setStops(prev => [...prev, pickupStop, deliveryStop]);
+  }, [stops]);
 
-  // Handle Remove from Van - removes stops from both pending and active
-  const handleRemoveFromVan = useCallback((load: CanvasLoad) => {
+  // Handle Remove from Van - removes stops from active route
+  const handleRemoveFromVan = useCallback((load: PlannerLoad) => {
     // Remove stops associated with this load from active stops
     setStops(prev => prev.filter(stop => stop.loadId !== load.id));
-    // Remove from pending stops
-    setPendingStops(prev => prev.filter(stop => stop.loadId !== load.id));
-    // Remove from loaded cargo tracking
-    setLoadedCargoIds(prev => prev.filter(id => id !== load.id));
   }, []);
 
-  // Confirm pending stops - moves them to active route
-  const handleConfirmRouteChanges = () => {
-    // Combine all stops and sort by their CURRENT numbers (which reflect user's reordering)
-    const allStops = [...stops, ...pendingStops].sort((a, b) => a.number - b.number);
-    
-    // Mark all pending loads as loaded in cargo
-    const pendingLoadIds = [...new Set(pendingStops.map(stop => stop.loadId))];
-    setLoadedCargoIds(prev => [...prev, ...pendingLoadIds]);
-    
-    // Set the combined sorted stops as the new active stops
-    setStops(allStops);
-    
-    // Clear pending stops
-    setPendingStops([]);
+  const normalizeOrganizerStatus = (status: PlannerLoad['status']): OrganizerStatus =>
+    status === 'TAKEN' || status === 'NEGOTIATING' ? status : 'ON BOARD';
+
+  const inactiveLoads = visiblePlannerLoads.filter((load) => load.isInactive);
+  const getOrganizerLoads = (status: OrganizerStatus) =>
+    visiblePlannerLoads.filter((load) => !load.isInactive && load.status === status);
+  const editingLoad = editingLoadId
+    ? loads.find((load) => load.id === editingLoadId) ?? null
+    : null;
+  const editingPalletLoad = editingPalletLoadId
+    ? loads.find((load) => load.id === editingPalletLoadId) ?? null
+    : null;
+
+  const handleSetLoadInactive = (loadId: string) => {
+    const load = loads.find((currentLoad) => currentLoad.id === loadId);
+    if (!load || load.isInactive) return;
+
+    setLoads((prev) =>
+      prev.map((currentLoad) =>
+        currentLoad.id === loadId ? { ...currentLoad, isInactive: true } : currentLoad,
+      ),
+    );
+    handleRemoveFromVan(load);
+    setEditingLoadId((current) => (current === loadId ? null : current));
+    setEditingPalletLoadId((current) => (current === loadId ? null : current));
   };
 
-  // Cancel pending stops - removes them and reverts load status
-  const handleCancelRouteChanges = () => {
-    // Get all load IDs from pending stops
-    const pendingLoadIds = [...new Set(pendingStops.map(stop => stop.loadId))];
-    
-    // Revert load status back to ON BOARD
-    setLoads(prev => prev.map(load => 
-      pendingLoadIds.includes(load.id) ? { ...load, status: 'ON BOARD' } : load
-    ));
-    
-    // Clear pending stops
-    setPendingStops([]);
+  const handleReactivateLoad = (loadId: string, preferredStatus?: OrganizerStatus) => {
+    const load = loads.find((currentLoad) => currentLoad.id === loadId);
+    if (!load) return;
+
+    const targetStatus = preferredStatus ?? normalizeOrganizerStatus(load.status);
+    const reactivatedLoad: PlannerLoad = {
+      ...load,
+      isInactive: false,
+      status: targetStatus,
+    };
+
+    setLoads((prev) =>
+      prev.map((currentLoad) =>
+        currentLoad.id === loadId ? reactivatedLoad : currentLoad,
+      ),
+    );
+
+    if ((targetStatus === 'TAKEN' || targetStatus === 'NEGOTIATING') && reactivatedLoad.plannerVanId) {
+      handleLoadToVan(reactivatedLoad);
+    } else {
+      handleRemoveFromVan(reactivatedLoad);
+    }
+  };
+
+  const handleOpenLoadEditor = (loadId: string) => {
+    setEditingPalletLoadId(null);
+    setEditingLoadId(loadId);
+  };
+
+  const handleCloseLoadEditor = () => {
+    setEditingLoadId(null);
+  };
+
+  const handleOpenPalletEditor = (loadId: string) => {
+    setEditingLoadId(null);
+    setEditingPalletLoadId(loadId);
+  };
+
+  const handleClosePalletEditor = () => {
+    setEditingPalletLoadId(null);
+  };
+
+  const syncLoadCargoToStops = (loadId: string, pallets: number, weight: number) => {
+    setStops((prev) =>
+      prev.map((stop) =>
+        stop.loadId === loadId
+          ? {
+              ...stop,
+              pallets,
+              weight,
+            }
+          : stop,
+      ),
+    );
+  };
+
+  const handleSaveLoadEditor = (updatedLoad: PlannerLoad) => {
+    const currentLoad = loads.find((load) => load.id === updatedLoad.id);
+    if (!currentLoad) {
+      setEditingLoadId(null);
+      return;
+    }
+
+    const normalizedUpdatedLoad: PlannerLoad = {
+      ...updatedLoad,
+      isInactive: false,
+    };
+
+    setLoads((prev) =>
+      prev.map((load) => (load.id === updatedLoad.id ? normalizedUpdatedLoad : load)),
+    );
+    syncLoadCargoToStops(
+      normalizedUpdatedLoad.id,
+      normalizedUpdatedLoad.pallets,
+      normalizedUpdatedLoad.weight,
+    );
+
+    const isPlannedStatus = (status: PlannerLoad['status']) =>
+      status === 'TAKEN' || status === 'NEGOTIATING';
+    const wasPlanned = isPlannedStatus(currentLoad.status);
+    const isPlanned = isPlannedStatus(normalizedUpdatedLoad.status);
+
+    if (isPlanned && !wasPlanned && normalizedUpdatedLoad.plannerVanId) {
+      handleLoadToVan(normalizedUpdatedLoad);
+    } else if (!isPlanned && wasPlanned) {
+      handleRemoveFromVan(normalizedUpdatedLoad);
+    }
+
+    setEditingLoadId(null);
+  };
+
+  const handleSavePalletEditor = (
+    loadId: string,
+    payload: {
+      pallets: number;
+      weight: number;
+      palletDimensions: Array<{ width: number; height: number; weightKg?: number }>;
+    },
+  ) => {
+    const safePallets = Math.max(0, Math.round(payload.pallets));
+    const safeWeight = Math.max(0, Math.round(payload.weight));
+    const normalizedIncomingPallets: PalletDimensions[] = payload.palletDimensions.map((pallet) => {
+      const normalizedWeight =
+        typeof pallet.weightKg === 'number' && Number.isFinite(pallet.weightKg)
+          ? Math.max(0, Number(pallet.weightKg.toFixed(2)))
+          : undefined;
+
+      return {
+        width: Math.max(10, Math.min(300, Math.round(pallet.width || 120))),
+        height: Math.max(10, Math.min(300, Math.round(pallet.height || 80))),
+        ...(normalizedWeight !== undefined ? { weightKg: normalizedWeight } : {}),
+      };
+    });
+    const nextPalletDimensions =
+      normalizedIncomingPallets.length > safePallets
+        ? normalizedIncomingPallets.slice(0, safePallets)
+        : [
+            ...normalizedIncomingPallets,
+            ...createDefaultPalletDimensions(safePallets - normalizedIncomingPallets.length),
+          ];
+
+    setLoads((prev) =>
+      prev.map((load) =>
+        load.id === loadId
+          ? {
+              ...load,
+              pallets: safePallets,
+              weight: safeWeight,
+              palletDimensions: nextPalletDimensions,
+            }
+          : load,
+      ),
+    );
+    syncLoadCargoToStops(loadId, safePallets, safeWeight);
+    setEditingPalletLoadId(null);
+  };
+
+  const formatLoadAddressLine = (city: string, address?: string) =>
+    `DE, ${extractPostcode(address)}, ${city}`;
+
+  const handleCopyAddress = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Ignore clipboard failures in unsupported environments.
+      return false;
+    }
+  };
+
+  const handleCopyAddressWithFeedback = async (copyKey: string, text: string) => {
+    const didCopy = await handleCopyAddress(text);
+    if (!didCopy) return;
+
+    setCopiedIndicatorKey(copyKey);
+    window.setTimeout(() => {
+      setCopiedIndicatorKey((current) => (current === copyKey ? null : current));
+    }, 1200);
+  };
+
+  const normalizeExternalLink = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+      const parsed = new URL(withProtocol);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return null;
+      }
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const updateLoadTranseuLink = (
+    loadId: string,
+    field: TranseuLinkField,
+    value: string,
+  ) => {
+    setLoads((prev) =>
+      prev.map((load) => (load.id === loadId ? { ...load, [field]: value } : load)),
+    );
+  };
+
+  const handleTranseuLinkAction = (
+    loadId: string,
+    field: TranseuLinkField,
+    shouldEdit = false,
+  ) => {
+    const load = loads.find((currentLoad) => currentLoad.id === loadId);
+    if (!load) return;
+
+    const existingLink = load[field];
+    if (existingLink && !shouldEdit) {
+      window.open(existingLink, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    const enteredLink = window.prompt(
+      existingLink ? 'Edit Transeu link URL' : 'Enter Transeu link URL',
+      existingLink ?? '',
+    );
+    if (enteredLink === null) return;
+
+    const normalizedLink = normalizeExternalLink(enteredLink);
+    if (!normalizedLink) return;
+
+    updateLoadTranseuLink(loadId, field, normalizedLink);
+  };
+
+  const updateLoadAddress = (
+    loadId: string,
+    field: 'originAddress' | 'destAddress',
+    value: string,
+  ) => {
+    setLoads((prev) =>
+      prev.map((load) => (load.id === loadId ? { ...load, [field]: value } : load)),
+    );
+  };
+
+  const addLoadExtraStop = (loadId: string) => {
+    setLoads((prev) =>
+      prev.map((load) => {
+        if (load.id !== loadId) return load;
+        return {
+          ...load,
+          extraStops: [
+            ...ensureLoadExtraStops(load),
+            {
+              address: '',
+              pallets: 1,
+              action: 'dropoff',
+            },
+          ],
+        };
+      }),
+    );
+  };
+
+  const updateLoadExtraStopAddress = (loadId: string, stopIndex: number, value: string) => {
+    setLoads((prev) =>
+      prev.map((load) => {
+        if (load.id !== loadId) return load;
+
+        const nextStops = ensureLoadExtraStops(load).map((stop, index) =>
+          index === stopIndex ? { ...stop, address: value } : stop,
+        );
+
+        return {
+          ...load,
+          extraStops: nextStops,
+        };
+      }),
+    );
+  };
+
+  const updateLoadExtraStopAction = (
+    loadId: string,
+    stopIndex: number,
+    action: 'pickup' | 'dropoff',
+  ) => {
+    setLoads((prev) =>
+      prev.map((load) => {
+        if (load.id !== loadId) return load;
+
+        const nextStops = ensureLoadExtraStops(load).map((stop, index) =>
+          index === stopIndex ? { ...stop, action } : stop,
+        );
+
+        return {
+          ...load,
+          extraStops: nextStops,
+        };
+      }),
+    );
+  };
+
+  const updateLoadExtraStopPallets = (
+    loadId: string,
+    stopIndex: number,
+    pallets: number,
+  ) => {
+    const safePallets = Number.isFinite(pallets) ? Math.max(0, Math.round(pallets)) : 0;
+
+    setLoads((prev) =>
+      prev.map((load) => {
+        if (load.id !== loadId) return load;
+
+        const nextStops = ensureLoadExtraStops(load).map((stop, index) =>
+          index === stopIndex ? { ...stop, pallets: safePallets } : stop,
+        );
+
+        return {
+          ...load,
+          extraStops: nextStops,
+        };
+      }),
+    );
+  };
+
+  const removeLoadExtraStop = (loadId: string, stopIndex: number) => {
+    setLoads((prev) =>
+      prev.map((load) => {
+        if (load.id !== loadId) return load;
+
+        const nextStops = ensureLoadExtraStops(load).filter((_, index) => index !== stopIndex);
+
+        return {
+          ...load,
+          extraStops: nextStops,
+        };
+      }),
+    );
+  };
+
+  const updateLoadWeight = (loadId: string, value: number) => {
+    const safeValue = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+    setLoads((prev) =>
+      prev.map((load) => (load.id === loadId ? { ...load, weight: safeValue } : load)),
+    );
+  };
+
+  const updateLoadPrice = (loadId: string, value: number) => {
+    const safeValue = Number.isFinite(value) ? Math.max(0, Number(value.toFixed(2))) : 0;
+    setLoads((prev) =>
+      prev.map((load) => (load.id === loadId ? { ...load, price: safeValue } : load)),
+    );
+  };
+
+  const updateLoadPalletDimension = (
+    loadId: string,
+    palletIndex: number,
+    dimension: 'width' | 'height',
+    value: number,
+  ) => {
+    const safeValue = Number.isFinite(value) ? Math.max(10, Math.min(300, Math.round(value))) : 10;
+
+    setLoads((prev) =>
+      prev.map((load) => {
+        if (load.id !== loadId) return load;
+
+        const nextPallets = ensureLoadPalletDimensions(load).map((pallet, index) =>
+          index === palletIndex ? { ...pallet, [dimension]: safeValue } : pallet,
+        );
+
+        return {
+          ...load,
+          pallets: nextPallets.length,
+          palletDimensions: nextPallets,
+        };
+      }),
+    );
+  };
+
+  const handleOrganizerDragStart = (
+    event: React.DragEvent<HTMLElement>,
+    loadId: string,
+  ) => {
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.closest(
+        'button, input, textarea, select, option, a, label, [data-no-drag="true"]',
+      )
+    ) {
+      event.preventDefault();
+      return;
+    }
+
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/load-id', loadId);
+    setDraggingLoadId(loadId);
+    setEditingLoadId(null);
+  };
+
+  const handleOrganizerDragEnd = () => {
+    setDraggingLoadId(null);
+    setDragOverStatus(null);
+  };
+
+  const handleOrganizerDragOver = (
+    event: React.DragEvent<HTMLElement>,
+    status: OrganizerStatus,
+  ) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDragOverStatus(status);
+  };
+
+  const handleOrganizerDrop = (
+    event: React.DragEvent<HTMLElement>,
+    status: OrganizerStatus,
+  ) => {
+    event.preventDefault();
+    const loadId = event.dataTransfer.getData('text/load-id');
+    if (loadId) {
+      changeLoadStatus(loadId, status);
+    }
+    setDragOverStatus(null);
+    setDraggingLoadId(null);
   };
 
   // Calculate route summaries for comparison
   const calculateRouteSummaries = () => {
     const FUEL_PRICE_PER_LITER = 1.65; // €1.65 per liter
+    const activeLoads = visiblePlannerLoads.filter((load) => !load.isInactive);
+    const loadIdsOnRoute = new Set(stops.map((stop) => stop.loadId));
 
     // Get TAKEN load IDs
-    const takenLoadIds = loads.filter(l => l.status === 'TAKEN').map(l => l.id);
+    const takenLoadIds = activeLoads.filter((load) => load.status === 'TAKEN').map((load) => load.id);
     
-    // Get toggled ON load IDs (non-TAKEN loads that are in cargo)
-    const toggledOnLoadIds = loadedCargoIds.filter(id => {
-      const load = loads.find(l => l.id === id);
-      return load && load.status !== 'TAKEN';
-    });
+    // Toggled ON load IDs (non-TAKEN loads that are currently enabled)
+    const toggledOnLoadIds = activeLoads
+      .filter(
+        (load) =>
+          load.status !== 'TAKEN' &&
+          loadedCargoIds.includes(load.id) &&
+          loadIdsOnRoute.has(load.id),
+      )
+      .map((load) => load.id);
 
     // Calculate for TAKEN loads only (Current Route)
-    const takenLoads = loads.filter(l => takenLoadIds.includes(l.id));
-    const currentTotalKm = takenLoads.reduce((sum, l) => sum + l.distance, 0);
+    const takenLoads = activeLoads.filter((load) => takenLoadIds.includes(load.id));
+    const currentTotalKm = takenLoads.reduce((sum, load) => sum + load.distance, 0);
     const currentFuelLiters = Math.round(currentTotalKm * 0.35);
     const currentFuelCost = Math.round(currentFuelLiters * FUEL_PRICE_PER_LITER);
-    const currentRevenue = takenLoads.reduce((sum, l) => sum + l.price, 0);
+    const currentRevenue = takenLoads.reduce((sum, load) => sum + load.price, 0);
     const currentRoute = {
       totalKm: currentTotalKm,
       totalTime: '5h 30m', // Mock calculation
@@ -795,13 +1364,13 @@ export default function App() {
       stopCount: takenLoadIds.length * 2, // pickup + delivery
     };
 
-    // Calculate for TAKEN + toggled ON loads (Toggled ON Route)
+    // Calculate for TAKEN + toggled ON loads
     const toggledOnIncludedIds = [...takenLoadIds, ...toggledOnLoadIds];
-    const toggledOnLoads = loads.filter(l => toggledOnIncludedIds.includes(l.id));
-    const toggledOnTotalKm = toggledOnLoads.reduce((sum, l) => sum + l.distance, 0);
+    const toggledOnLoads = activeLoads.filter((load) => toggledOnIncludedIds.includes(load.id));
+    const toggledOnTotalKm = toggledOnLoads.reduce((sum, load) => sum + load.distance, 0);
     const toggledOnFuelLiters = Math.round(toggledOnTotalKm * 0.35);
     const toggledOnFuelCost = Math.round(toggledOnFuelLiters * FUEL_PRICE_PER_LITER);
-    const toggledOnRevenue = toggledOnLoads.reduce((sum, l) => sum + l.price, 0);
+    const toggledOnRevenue = toggledOnLoads.reduce((sum, load) => sum + load.price, 0);
     const toggledOnRoute = {
       totalKm: toggledOnTotalKm,
       totalTime: '9h 15m', // Mock calculation
@@ -814,11 +1383,11 @@ export default function App() {
     };
 
     // Calculate for ALL loads (Everything Route)
-    const allLoads = loads;
-    const everythingTotalKm = allLoads.reduce((sum, l) => sum + l.distance, 0);
+    const allLoads = activeLoads;
+    const everythingTotalKm = allLoads.reduce((sum, load) => sum + load.distance, 0);
     const everythingFuelLiters = Math.round(everythingTotalKm * 0.35);
     const everythingFuelCost = Math.round(everythingFuelLiters * FUEL_PRICE_PER_LITER);
-    const everythingRevenue = allLoads.reduce((sum, l) => sum + l.price, 0);
+    const everythingRevenue = allLoads.reduce((sum, load) => sum + load.price, 0);
     const everythingRoute = {
       totalKm: everythingTotalKm,
       totalTime: '12h 45m', // Mock calculation
@@ -839,10 +1408,26 @@ export default function App() {
   };
 
   const routeComparison = calculateRouteSummaries();
+  const hasSelectedStops = selectedStops.length > 0;
+
+  const organizerMapPoints = sidebarStops.map((stop, index, allStops) => {
+    if (allStops.length === 1) {
+      return { stop, x: 50, y: 50 };
+    }
+
+    const t = index / (allStops.length - 1);
+    const x = 10 + t * 80;
+    const yBase = 20 + Math.sin(t * Math.PI) * 55;
+    const yOffset = index % 2 === 0 ? -6 : 6;
+    const y = Math.max(8, Math.min(92, yBase + yOffset));
+
+    return { stop, x, y };
+  });
+  const organizerMapPath = organizerMapPoints.map((point) => `${point.x},${point.y}`).join(' ');
 
   return (
-    <DndProvider backend={HTML5Backend}>
-      <div className="h-screen flex flex-col bg-[#F8FAFC]">
+    <div className="h-screen flex flex-col bg-[#F8FAFC]">
+        <ThinModuleMenu />
         {/* Top Navigation */}
         <nav className={`bg-white border-b px-6 py-3 flex items-center justify-between z-10 ${
           routeMode === 'simulation' ? 'border-amber-400 border-b-2' : 'border-gray-200'
@@ -866,33 +1451,6 @@ export default function App() {
               selectedVanId={selectedVan}
               onVanChange={setSelectedVan}
             />
-
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 border border-gray-300">
-              <button
-                onClick={handleZoomOut}
-                className="p-1.5 hover:bg-white"
-                title="Zoom Out"
-              >
-                <ZoomOut className="w-4 h-4 text-gray-700" />
-              </button>
-              <span className="text-sm font-medium text-gray-900 min-w-[60px] text-center">
-                {Math.round(scale * 100)}%
-              </span>
-              <button
-                onClick={handleZoomIn}
-                className="p-1.5 hover:bg-white"
-                title="Zoom In"
-              >
-                <ZoomIn className="w-4 h-4 text-gray-700" />
-              </button>
-              <button
-                onClick={handleZoomReset}
-                className="p-1.5 hover:bg-white border-l border-gray-300 ml-1 pl-2"
-                title="Reset View"
-              >
-                <Maximize className="w-4 h-4 text-gray-700" />
-              </button>
-            </div>
 
             <RouteModeToggle
               mode={routeMode}
@@ -922,153 +1480,34 @@ export default function App() {
           </div>
         </nav>
 
-        {/* Route Tab Switcher */}
-        <RouteTabSwitcher
-          activeTab={activeRouteTab}
-          variants={routeVariants}
-          onTabChange={handleRouteTabChange}
-          onRenameVariant={handleRenameRouteVariant}
-          onDeleteVariant={handleDeleteRouteVariant}
-          onDuplicateVariant={handleDuplicateVariant}
-          onDuplicateCurrent={handleDuplicateCurrent}
-        />
-
         {/* Main Content Area */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left side - Canvas + Route Comparison */}
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Canvas Area */}
-            <div
-              ref={canvasRef}
-              className="flex-1 overflow-hidden relative bg-gray-100"
-              onWheel={handleWheel}
-              onMouseDown={handleCanvasMouseDown}
-              onMouseMove={handleCanvasMouseMove}
-              onMouseUp={handleCanvasMouseUp}
-              style={{
-                cursor: isPanning ? 'grabbing' : isSpacePressed ? 'grab' : 'default',
-              }}
-            >
-              {/* Grid background */}
-              <div
-                className="absolute inset-0"
-                style={{
-                  backgroundImage: `
-                  linear-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px),
-                  linear-gradient(90deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px)
-                `,
-                  backgroundSize: `${50 * scale}px ${50 * scale}px`,
-                  backgroundPosition: `${pan.x}px ${pan.y}px`,
-                }}
-              />
-
-              {/* Canvas content */}
-              <div
-                className="absolute"
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-                  transformOrigin: '0 0',
-                  width: '5000px',
-                  height: '5000px',
-                }}
-              >
-                {/* Load Cards */}
-                {loads.map((load) => (
-                  <CanvasLoadCard
-                    key={load.id}
-                    load={load}
-                    onMove={moveLoad}
-                    onColorChange={changeLoadColor}
-                    onStatusChange={changeLoadStatus}
-                    onAddToCargo={() => handleLoadToVan(load)}
-                    onRemoveFromCargo={() => handleRemoveFromVan(load)}
-                    isLoadedInCargo={loadedCargoIds.includes(load.id)}
-                    scale={scale}
-                  />
-                ))}
-
-                {/* Route Summary Card */}
-                {!isRouteSummaryDocked && (
-                  <CanvasRouteSummaryCard
-                    summary={routeSummary}
-                    onMove={moveRouteSummary}
-                    onDock={() => setIsRouteSummaryDocked(true)}
-                    scale={scale}
-                  />
-                )}
-
-                {/* Van Cargo Planner */}
-                <CanvasVanCargo
-                  vanId={selectedVan}
-                  x={vanCargoPosition.x}
-                  y={vanCargoPosition.y}
-                  onMove={moveVanCargo}
-                  loadToAdd={loadToAddToCargo}
-                  onLoadAdded={() => setLoadToAddToCargo(null)}
-                  onCargoLoadsChange={setLoadedCargoIds}
-                  scale={scale}
-                  selectedStopId={selectedCargoStopId}
-                  onStopSelect={setSelectedCargoStopId}
-                  routedStops={stops.map(stop => ({
-                    id: stop.id,
-                    number: stop.number,
-                    city: stop.city,
-                    loadId: stop.loadId,
-                    pallets: stop.pallets,
-                    type: stop.type,
-                    color: stop.color,
-                    label: `${stop.city.substring(0, 3)}-${stop.number}`
-                  }))}
-                />
-              </div>
-
-              {/* Helper text */}
-              
-            </div>
-
-            {/* Bottom Bar - Route Comparison (only spans canvas area) */}
-            {!pendingStops.length && (
-              <RouteComparison
-                currentRoute={routeComparison.currentRoute}
-                toggledOnRoute={routeComparison.toggledOnRoute}
-                everythingRoute={routeComparison.everythingRoute}
-                hasToggledLoads={routeComparison.hasToggledLoads}
-              />
-            )}
-          </div>
-
+        <div className="flex-1 flex overflow-hidden" onClick={clearLoadSelection}>
           {/* Right Sidebar - Route Stops */}
-          <div className="w-80 bg-white border-l border-gray-300 flex flex-col overflow-hidden">
+          <div className="order-last flex w-80 flex-col overflow-hidden border-l border-gray-300 bg-white">
             {/* Sidebar Header */}
             <div className="relative z-10 bg-gray-50 border-b border-gray-300 px-4 py-3">
               <h2 className="font-semibold text-sm text-gray-900">
                 {routeMode === 'simulation' ? 'Simulation Route' : 'Route Stops'}
               </h2>
               <p className="text-xs text-gray-500 mt-0.5">Click to select, drag to reorder</p>
-              
-              {/* Stick/Unstick Controls */}
-              {selectedStops.length > 0 && (
-                <div className="mt-2 flex gap-2">
-                  {selectedStops.length >= 2 && (
-                    <button
-                      onClick={handleStickStops}
-                      className="flex-1 px-2 py-1.5 bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 flex items-center justify-center gap-1"
-                    >
-                      <Link className="w-3 h-3" />
-                      Stick ({selectedStops.length})
-                    </button>
-                  )}
-                  {stops.some((s) => selectedStops.includes(s.id) && s.groupId) && (
-                    <button
-                      onClick={handleUnstickStops}
-                      className="flex-1 px-2 py-1.5 bg-gray-600 text-white text-xs font-medium hover:bg-gray-700 flex items-center justify-center gap-1"
-                    >
-                      <Unlink className="w-3 h-3" />
-                      Unstick
-                    </button>
-                  )}
+
+              {/* Reserve controls space to prevent layout jump on first select/deselect */}
+              <div className="mt-2 min-h-8">
+                <div
+                  className={`flex gap-2 transition-opacity ${
+                    hasSelectedStops ? 'opacity-100' : 'pointer-events-none opacity-0'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    disabled
+                    className="flex-1 rounded border border-slate-300 bg-slate-100 px-2 py-1.5 text-xs font-semibold text-slate-600"
+                    title="Isolate selected stops (coming soon)"
+                  >
+                    Isolate ({selectedStops.length})
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
 
             {/* Simulation Impact Panel */}
@@ -1081,14 +1520,23 @@ export default function App() {
             {/* Stops List */}
             <div className="flex-1 overflow-y-auto">
               {sidebarStops.map((stop, index) => {
-                const isPending = pendingStops.some(ps => ps.id === stop.id);
-                const load = loads.find(l => l.id === stop.loadId);
+                const load = visiblePlannerLoads.find(l => l.id === stop.loadId);
+                const previousStop = index > 0 ? sidebarStops[index - 1] : null;
+                const segmentKmValue = previousStop
+                  ? Math.max(0, Math.round(previousStop.distanceToNext ?? 0))
+                  : 0;
+                const segmentKmLabel = segmentKmValue > 0 ? `${segmentKmValue} km` : '— km';
                 const isInCargo = load?.status !== 'TAKEN' && loadedCargoIds.includes(stop.loadId); // Blue dot for non-TAKEN loads that are loaded
                 const showToggle = load?.status !== 'TAKEN'; // Only show toggle for non-TAKEN loads
                 return (
-                  <div key={stop.id}>
+                  <div key={stop.id} onClick={(event) => event.stopPropagation()}>
                     {/* Cargo View Icon - Divider line with eye icon */}
                     <div className="relative h-px bg-gray-200 z-50">
+                      {index > 0 && (
+                        <span className="pointer-events-none absolute right-11 top-1/2 -translate-y-1/2 rounded bg-white px-1 text-[10px] font-medium text-gray-400">
+                          {segmentKmLabel}
+                        </span>
+                      )}
                       <button
                         onClick={() => setSelectedCargoStopId(stop.id)}
                         className={`absolute right-3 ${
@@ -1104,78 +1552,756 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* Stop Card */}
-                    <div className={isPending ? 'bg-amber-50/30' : ''}>
-                      <SidebarStopCard
-                        stop={stop}
-                        index={index}
-                        isSelected={selectedStops.includes(stop.id)}
-                        isGrouped={!!stop.groupId}
-                        isInCargo={isInCargo}
-                        isPending={isPending}
-                        onSelect={handleSelectStop}
-                        onReorder={handleReorderStops}
-                        onToggleCargo={showToggle ? (stopId) => {
-                          const stop = stops.find(s => s.id === stopId) || pendingStops.find(s => s.id === stopId);
-                          if (!stop) return;
-                          
-                          // Toggle cargo visibility
-                          setLoadedCargoIds(prev => 
-                            prev.includes(stop.loadId) 
-                              ? prev.filter(id => id !== stop.loadId)
-                              : [...prev, stop.loadId]
-                          );
-                        } : undefined}
-                      />
-                    </div>
+                    <SidebarStopCard
+                      stop={stop}
+                      index={index}
+                      draggingIndex={draggingSidebarStopIndex}
+                      isSelected={selectedStops.includes(stop.id)}
+                      isInCargo={isInCargo}
+                      onSelect={handleSelectStop}
+                      onReorder={handleReorderStops}
+                      onDraggingIndexChange={setDraggingSidebarStopIndex}
+                      onTranseuAction={handleSidebarStopTranseuAction}
+                      onToggleCargo={showToggle ? (stopId) => {
+                        const routeStop = stops.find(s => s.id === stopId);
+                        if (!routeStop) return;
+
+                        // Toggle cargo visibility
+                        setLoadedCargoIds(prev =>
+                          prev.includes(routeStop.loadId)
+                            ? prev.filter(id => id !== routeStop.loadId)
+                            : [...prev, routeStop.loadId]
+                        );
+                      } : undefined}
+                    />
                   </div>
                 );
               })}
             </div>
 
-            {/* Pending Stops Confirmation Panel */}
-            {pendingStops.length > 0 && (
-              <div className="border-t-4 border-amber-500 bg-amber-50 px-4 py-4">
-                <div className="mb-3">
-                  <p className="text-sm font-semibold text-amber-900 mb-1">
-                    {pendingStops.length} stop{pendingStops.length > 1 ? 's' : ''} pending confirmation
-                  </p>
-                  <p className="text-xs text-amber-700">
-                    Arrange the stops above, then confirm to add them to the active route.
+          </div>
+
+          <div className="grid h-full flex-1 min-w-0 grid-cols-[50%_50%] overflow-hidden">
+              <aside className="min-w-0 bg-white border-r border-gray-300 flex flex-col">
+                <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-gray-900">Route Status Organizer</h2>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Drag cards between boards to change route status.
+                      </p>
+                      {isApiConnected && (
+                        <p className="mt-0.5 text-[11px] text-gray-500">
+                          {isSavingPlanner ? 'Saving changes...' : 'Saved to backend'}
+                        </p>
+                      )}
+                      {lastPlannerSyncError && (
+                        <p className="mt-0.5 text-[11px] text-red-600">
+                          Sync error: {lastPlannerSyncError}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setIsInactiveModalOpen(true)}
+                      className="shrink-0 px-2.5 py-1.5 text-[11px] font-semibold border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
+                      {`Show Inactive (${inactiveLoads.length})`}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-h-0 p-3 flex flex-col gap-3">
+                  <div className="min-h-0 flex-1 grid grid-cols-2 grid-rows-[minmax(0,3fr)_minmax(0,1fr)] gap-3">
+                    {ORGANIZER_STATUSES.map((status) => {
+                      const statusLoads = getOrganizerLoads(status);
+                      const statusStyle =
+                        status === 'TAKEN'
+                          ? 'border-blue-300 bg-blue-50'
+                          : status === 'NEGOTIATING'
+                            ? 'border-emerald-300 bg-emerald-50'
+                            : 'border-slate-300 bg-slate-50';
+                      const layoutStyle = status === 'TAKEN' ? 'col-span-2' : '';
+
+                      return (
+                        <section
+                          key={status}
+                          onDragOver={(event) => handleOrganizerDragOver(event, status)}
+                          onDrop={(event) => handleOrganizerDrop(event, status)}
+                          onDragLeave={() => setDragOverStatus(null)}
+                          className={`min-h-0 rounded-xl border p-3 transition-colors flex flex-col ${layoutStyle} ${
+                            dragOverStatus === status ? 'ring-2 ring-blue-400 ring-offset-1' : ''
+                          } ${statusStyle}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-xs font-semibold tracking-wide text-gray-900">
+                              {status}
+                            </h3>
+                            <span className="text-xs text-gray-600">{statusLoads.length}</span>
+                          </div>
+
+                          <div
+                            className={`mt-2 min-h-0 overflow-x-hidden overflow-y-auto pr-1 ${
+                              status === 'TAKEN'
+                                ? 'grid grid-cols-4 gap-2 content-start items-start auto-rows-max'
+                                : 'grid grid-cols-2 gap-2 content-start items-start auto-rows-max'
+                            }`}
+                          >
+                            {statusLoads.length === 0 && (
+                              <p
+                                className={`rounded-lg border border-dashed border-gray-300 bg-white/70 px-2 py-3 text-center text-xs text-gray-500 ${
+                                  status === 'TAKEN' ? 'col-span-4' : 'col-span-2'
+                                }`}
+                              >
+                                Drop routes here
+                              </p>
+                            )}
+
+                            {statusLoads.map((load) => {
+                              const pricePerKm = load.distance > 0 ? load.price / load.distance : 0;
+                              const pickupAddressLine = formatLoadAddressLine(
+                                load.originCity,
+                                load.originAddress,
+                              );
+                              const deliveryAddressLine = formatLoadAddressLine(
+                                load.destCity,
+                                load.destAddress,
+                              );
+                              const loadRouteStops = combinedStops
+                                .filter(
+                                  (stop) =>
+                                    stop.loadId === load.id &&
+                                    (stop.type === 'pickup' || stop.type === 'delivery'),
+                                )
+                                .sort((a, b) => a.number - b.number);
+                              const pickupStop = loadRouteStops.find((stop) => stop.type === 'pickup');
+                              const deliveryStop = loadRouteStops.find((stop) => stop.type === 'delivery');
+                              const pickupScheduleLabel = formatDateTimeRange(
+                                load.pickupWindowStart ?? load.pickupDate,
+                                load.pickupWindowEnd,
+                                pickupStop?.eta,
+                              );
+                              const deliveryScheduleLabel = formatDateTimeRange(
+                                load.deliveryWindowStart ?? load.deliveryDate,
+                                load.deliveryWindowEnd,
+                                deliveryStop?.eta,
+                              );
+                              const pickupHasTranseuLink = Boolean(load.originTranseuLink);
+                              const deliveryHasTranseuLink = Boolean(load.destTranseuLink);
+                              const pickupLineCopyKey = `load-${load.id}-pickup-line`;
+                              const deliveryLineCopyKey = `load-${load.id}-delivery-line`;
+
+                              return (
+                                <article
+                                  key={load.id}
+                                  draggable
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleSelectLoad(load.id);
+                                  }}
+                                  onDragStart={(event) => handleOrganizerDragStart(event, load.id)}
+                                  onDragEnd={handleOrganizerDragEnd}
+                                  className={`w-full max-w-full min-w-0 self-start overflow-hidden rounded-lg border bg-white p-3 shadow-sm transition ${
+                                    selectedLoadId === load.id
+                                      ? 'border-blue-400 ring-2 ring-blue-200'
+                                      : 'border-gray-200'
+                                  } ${
+                                    draggingLoadId === load.id ? 'opacity-50' : 'hover:shadow-md'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <p
+                                        className="truncate text-sm font-semibold"
+                                        style={{ color: load.color }}
+                                      >
+                                        {load.brokerage}
+                                      </p>
+                                      <p className="truncate text-[11px] text-gray-500">
+                                        {load.contactPerson || 'Broker name not set'}
+                                      </p>
+                                    </div>
+                                    <div className="relative flex items-center gap-1">
+                                      <button
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handleOpenLoadEditor(load.id);
+                                        }}
+                                        className="rounded border border-gray-300 bg-white p-1 text-gray-600 hover:bg-gray-100 hover:text-gray-800"
+                                        title="Edit load"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handleSetLoadInactive(load.id);
+                                        }}
+                                        className="rounded border border-red-300 bg-white p-1 text-red-600 hover:bg-red-50 hover:text-red-700"
+                                        title="Mark inactive"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-1 space-y-1">
+                                    <div className="space-y-0.5">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <button
+                                          type="button"
+                                          onMouseDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            handleCopyAddressWithFeedback(
+                                              pickupLineCopyKey,
+                                              load.originAddress || pickupAddressLine,
+                                            );
+                                          }}
+                                          className="truncate text-left text-[11px] text-gray-600 hover:text-gray-800"
+                                          title="Copy pickup line"
+                                        >
+                                          {pickupAddressLine}
+                                        </button>
+                                        <div className="flex items-center gap-0.5">
+                                          <button
+                                            onMouseDown={(event) => event.stopPropagation()}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleTranseuLinkAction(
+                                                load.id,
+                                                'originTranseuLink',
+                                                event.altKey,
+                                              );
+                                            }}
+                                            className={`rounded p-0.5 transition-colors ${
+                                              pickupHasTranseuLink
+                                                ? 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                                                : 'text-gray-300 hover:bg-gray-100 hover:text-gray-500'
+                                            }`}
+                                            title={
+                                              pickupHasTranseuLink
+                                                ? 'Open Transeu link (Alt+Click to edit)'
+                                                : 'Add Transeu link'
+                                            }
+                                          >
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                          </button>
+                                          <button
+                                            onMouseDown={(event) => event.stopPropagation()}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleCopyAddressWithFeedback(
+                                                pickupLineCopyKey,
+                                                load.originAddress || pickupAddressLine,
+                                              );
+                                            }}
+                                            className={`rounded p-0.5 transition-colors ${
+                                              copiedIndicatorKey === pickupLineCopyKey
+                                                ? 'bg-emerald-50 text-emerald-600'
+                                                : 'text-gray-400 hover:bg-gray-100 hover:text-gray-700'
+                                            }`}
+                                            title="Copy pickup line"
+                                          >
+                                            <Copy className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                      <p className="text-[10px] text-gray-500">{pickupScheduleLabel}</p>
+                                    </div>
+                                    <div className="space-y-0.5">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <button
+                                          type="button"
+                                          onMouseDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            handleCopyAddressWithFeedback(
+                                              deliveryLineCopyKey,
+                                              load.destAddress || deliveryAddressLine,
+                                            );
+                                          }}
+                                          className="truncate text-left text-[11px] text-gray-600 hover:text-gray-800"
+                                          title="Copy delivery line"
+                                        >
+                                          {deliveryAddressLine}
+                                        </button>
+                                        <div className="flex items-center gap-0.5">
+                                          <button
+                                            onMouseDown={(event) => event.stopPropagation()}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleTranseuLinkAction(
+                                                load.id,
+                                                'destTranseuLink',
+                                                event.altKey,
+                                              );
+                                            }}
+                                            className={`rounded p-0.5 transition-colors ${
+                                              deliveryHasTranseuLink
+                                                ? 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                                                : 'text-gray-300 hover:bg-gray-100 hover:text-gray-500'
+                                            }`}
+                                            title={
+                                              deliveryHasTranseuLink
+                                                ? 'Open Transeu link (Alt+Click to edit)'
+                                                : 'Add Transeu link'
+                                            }
+                                          >
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                          </button>
+                                          <button
+                                            onMouseDown={(event) => event.stopPropagation()}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleCopyAddressWithFeedback(
+                                                deliveryLineCopyKey,
+                                                load.destAddress || deliveryAddressLine,
+                                              );
+                                            }}
+                                            className={`rounded p-0.5 transition-colors ${
+                                              copiedIndicatorKey === deliveryLineCopyKey
+                                                ? 'bg-emerald-50 text-emerald-600'
+                                                : 'text-gray-400 hover:bg-gray-100 hover:text-gray-700'
+                                            }`}
+                                            title="Copy delivery line"
+                                          >
+                                            <Copy className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                      <p className="text-[10px] text-gray-500">{deliveryScheduleLabel}</p>
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onMouseDown={(event) => event.stopPropagation()}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleOpenPalletEditor(load.id);
+                                    }}
+                                    className="mt-2 flex w-full items-center justify-between rounded border border-gray-200 bg-gray-50 px-2 py-1 text-left text-xs text-gray-700 hover:bg-gray-100"
+                                    title="Edit pallets and weight"
+                                  >
+                                    <span>
+                                      {load.pallets} pallets • {load.weight} kg
+                                    </span>
+                                  </button>
+
+                                  <div className="mt-2 grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-[11px] font-semibold text-gray-800 tabular-nums">
+                                    <span className="text-left">{load.distance} km</span>
+                                    <span className="pl-1 text-left">{pricePerKm.toFixed(2)}€/km</span>
+                                    <div className="flex items-center justify-end">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        step="0.01"
+                                        value={load.price}
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          event.currentTarget.select();
+                                        }}
+                                        onFocus={(event) => event.currentTarget.select()}
+                                        onChange={(event) =>
+                                          updateLoadPrice(load.id, Number(event.target.value))
+                                        }
+                                        className="w-14 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-right text-[11px] font-semibold text-gray-900"
+                                      />
+                                    </div>
+                                  </div>
+
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+
+                </div>
+              </aside>
+
+              <section className="min-w-0 flex flex-col bg-[radial-gradient(circle_at_top_left,_#dbeafe_0%,_#f8fafc_45%,_#eef2ff_100%)]">
+                <div className="border-b border-slate-300 bg-white/80 px-4 py-3 backdrop-blur-sm">
+                  <div className="inline-flex items-center border border-slate-300 bg-white p-1">
+                    <button
+                      onClick={() => setMiddleWorkspaceTab('load-planner')}
+                      className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        middleWorkspaceTab === 'load-planner'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Load Planner
+                    </button>
+                    <button
+                      onClick={() => setMiddleWorkspaceTab('maps')}
+                      className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        middleWorkspaceTab === 'maps'
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Maps
+                    </button>
+                  </div>
+                </div>
+
+                <div className="min-h-0 flex-1 grid grid-rows-[minmax(0,3fr)_minmax(0,1fr)]">
+                  <div className="min-h-0 overflow-auto">
+                    {middleWorkspaceTab === 'load-planner' && (
+                      <div className="mx-auto h-full min-w-[880px] max-w-[1280px] p-6">
+                        <div className="relative h-full min-h-[680px] rounded-2xl border border-slate-300 bg-white/70 shadow-inner backdrop-blur-sm">
+                          <CanvasVanCargo
+                            vanId={selectedVan}
+                            x={organizerVanCargoPosition.x}
+                            y={organizerVanCargoPosition.y}
+                            onMove={(x, y) => setOrganizerVanCargoPosition({ x, y })}
+                            scale={1}
+                            selectedStopId={selectedCargoStopId}
+                            onStopSelect={setSelectedCargoStopId}
+                            routedStops={cargoRoutedStops}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {middleWorkspaceTab === 'maps' && (
+                      <div className="mx-auto h-full min-w-[880px] max-w-[1280px] p-6">
+                        <div className="h-full min-h-[680px] rounded-2xl border border-slate-300 bg-white/80 p-4 shadow-inner backdrop-blur-sm">
+                          {organizerMapPoints.length > 0 ? (
+                            <div className="relative h-full overflow-hidden rounded-xl border border-slate-200 bg-[linear-gradient(130deg,#e2e8f0_0%,#f8fafc_45%,#dbeafe_100%)]">
+                              <div
+                                className="absolute inset-0 opacity-35"
+                                style={{
+                                  backgroundImage:
+                                    'linear-gradient(rgba(15, 23, 42, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.08) 1px, transparent 1px)',
+                                  backgroundSize: '44px 44px',
+                                }}
+                              />
+
+                              <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full">
+                                {organizerMapPoints.length > 1 && (
+                                  <polyline
+                                    points={organizerMapPath}
+                                    fill="none"
+                                    stroke="#2563eb"
+                                    strokeWidth="1.2"
+                                    strokeLinejoin="round"
+                                    strokeLinecap="round"
+                                    strokeDasharray="0"
+                                  />
+                                )}
+
+                                {organizerMapPoints.map(({ stop, x, y }) => (
+                                  <g key={stop.id}>
+                                    <circle cx={x} cy={y} r="2.6" fill="white" stroke={stop.color} strokeWidth="0.7" />
+                                    <circle cx={x} cy={y} r="1.1" fill={stop.color} />
+                                    <text
+                                      x={x}
+                                      y={y - 3.6}
+                                      textAnchor="middle"
+                                      fontSize="2.8"
+                                      fill="#0f172a"
+                                      fontWeight="700"
+                                    >
+                                      {stop.number}
+                                    </text>
+                                  </g>
+                                ))}
+                              </svg>
+
+                              <div className="absolute left-4 top-4 max-w-[320px] rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-xs text-slate-700 shadow-sm">
+                                Map preview based on current stop order.
+                              </div>
+
+                            </div>
+                          ) : (
+                            <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 text-sm font-medium text-slate-500">
+                              No stops available for map preview.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-h-0 overflow-hidden border-t border-slate-300 bg-white">
+                    <RouteComparison
+                      currentRoute={routeComparison.currentRoute}
+                      toggledOnRoute={routeComparison.toggledOnRoute}
+                      everythingRoute={routeComparison.everythingRoute}
+                      hasToggledLoads={routeComparison.hasToggledLoads}
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+        </div>
+
+        {isInactiveModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
+            onClick={() => setIsInactiveModalOpen(false)}
+          >
+            <div
+              className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-300 bg-white shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Inactive Loads</h3>
+                  <p className="text-xs text-slate-500">
+                    Restore inactive loads back to organizer boards.
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleCancelRouteChanges}
-                    className="flex-1 px-4 py-2.5 bg-white text-amber-900 text-sm font-semibold border-2 border-amber-300 hover:bg-amber-100 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleConfirmRouteChanges}
-                    className="flex-1 px-4 py-2.5 bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 transition-colors"
-                  >
-                    Confirm Route
-                  </button>
+                <button
+                  onClick={() => setIsInactiveModalOpen(false)}
+                  className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                {inactiveLoads.length === 0 && (
+                  <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">
+                    No inactive routes.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {inactiveLoads.map((load) => {
+                    const pickupAddressLine = formatLoadAddressLine(
+                      load.originCity,
+                      load.originAddress,
+                    );
+                    const deliveryAddressLine = formatLoadAddressLine(
+                      load.destCity,
+                      load.destAddress,
+                    );
+                    const loadRouteStops = combinedStops
+                      .filter(
+                        (stop) =>
+                          stop.loadId === load.id &&
+                          (stop.type === 'pickup' || stop.type === 'delivery'),
+                      )
+                      .sort((a, b) => a.number - b.number);
+                    const pickupStop = loadRouteStops.find((stop) => stop.type === 'pickup');
+                    const deliveryStop = loadRouteStops.find((stop) => stop.type === 'delivery');
+                    const pickupScheduleLabel = formatDateTimeRange(
+                      load.pickupWindowStart ?? load.pickupDate,
+                      load.pickupWindowEnd,
+                      pickupStop?.eta,
+                    );
+                    const deliveryScheduleLabel = formatDateTimeRange(
+                      load.deliveryWindowStart ?? load.deliveryDate,
+                      load.deliveryWindowEnd,
+                      deliveryStop?.eta,
+                    );
+                    const pickupHasTranseuLink = Boolean(load.originTranseuLink);
+                    const deliveryHasTranseuLink = Boolean(load.destTranseuLink);
+                    const pickupLineCopyKey = `inactive-load-${load.id}-pickup-line`;
+                    const deliveryLineCopyKey = `inactive-load-${load.id}-delivery-line`;
+
+                    return (
+                      <article
+                        key={load.id}
+                        className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">
+                              {load.brokerage}
+                            </p>
+                            <p className="truncate text-[11px] text-slate-500">
+                              {load.contactPerson || 'Broker name not set'}
+                            </p>
+                          </div>
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className="text-[10px] font-semibold uppercase text-slate-500">
+                              {normalizeOrganizerStatus(load.status)}
+                            </span>
+                            <span className="text-[10px] font-semibold text-slate-400">
+                              {load.referenceCode ?? load.id}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-1 space-y-1">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopyAddressWithFeedback(
+                                    pickupLineCopyKey,
+                                    load.originAddress || pickupAddressLine,
+                                  )
+                                }
+                                className="truncate text-left text-[11px] text-slate-600 hover:text-slate-800"
+                                title="Copy pickup line"
+                              >
+                                {pickupAddressLine}
+                              </button>
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  onClick={(event) =>
+                                    handleTranseuLinkAction(
+                                      load.id,
+                                      'originTranseuLink',
+                                      event.altKey,
+                                    )
+                                  }
+                                  className={`rounded p-0.5 transition-colors ${
+                                    pickupHasTranseuLink
+                                      ? 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                                      : 'text-slate-300 hover:bg-slate-100 hover:text-slate-500'
+                                  }`}
+                                  title={
+                                    pickupHasTranseuLink
+                                      ? 'Open Transeu link (Alt+Click to edit)'
+                                      : 'Add Transeu link'
+                                  }
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    handleCopyAddressWithFeedback(
+                                      pickupLineCopyKey,
+                                      load.originAddress || pickupAddressLine,
+                                    )
+                                  }
+                                  className={`rounded p-0.5 transition-colors ${
+                                    copiedIndicatorKey === pickupLineCopyKey
+                                      ? 'bg-emerald-50 text-emerald-600'
+                                      : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                                  }`}
+                                  title="Copy pickup line"
+                                >
+                                  <Copy className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-slate-500">{pickupScheduleLabel}</p>
+                          </div>
+                          <div className="space-y-0.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopyAddressWithFeedback(
+                                    deliveryLineCopyKey,
+                                    load.destAddress || deliveryAddressLine,
+                                  )
+                                }
+                                className="truncate text-left text-[11px] text-slate-600 hover:text-slate-800"
+                                title="Copy delivery line"
+                              >
+                                {deliveryAddressLine}
+                              </button>
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  onClick={(event) =>
+                                    handleTranseuLinkAction(
+                                      load.id,
+                                      'destTranseuLink',
+                                      event.altKey,
+                                    )
+                                  }
+                                  className={`rounded p-0.5 transition-colors ${
+                                    deliveryHasTranseuLink
+                                      ? 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                                      : 'text-slate-300 hover:bg-slate-100 hover:text-slate-500'
+                                  }`}
+                                  title={
+                                    deliveryHasTranseuLink
+                                      ? 'Open Transeu link (Alt+Click to edit)'
+                                      : 'Add Transeu link'
+                                  }
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    handleCopyAddressWithFeedback(
+                                      deliveryLineCopyKey,
+                                      load.destAddress || deliveryAddressLine,
+                                    )
+                                  }
+                                  className={`rounded p-0.5 transition-colors ${
+                                    copiedIndicatorKey === deliveryLineCopyKey
+                                      ? 'bg-emerald-50 text-emerald-600'
+                                      : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                                  }`}
+                                  title="Copy delivery line"
+                                >
+                                  <Copy className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-slate-500">{deliveryScheduleLabel}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 flex gap-1">
+                          <button
+                            onClick={() => handleReactivateLoad(load.id)}
+                            className="flex-1 px-2 py-1 text-[10px] font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                          >
+                            Restore
+                          </button>
+                          <button
+                            onClick={() => handleReactivateLoad(load.id, 'ON BOARD')}
+                            className="px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                          >
+                            ON
+                          </button>
+                          <button
+                            onClick={() => handleReactivateLoad(load.id, 'NEGOTIATING')}
+                            className="px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                          >
+                            NEG
+                          </button>
+                          <button
+                            onClick={() => handleReactivateLoad(load.id, 'TAKEN')}
+                            className="px-2 py-1 text-[10px] font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                          >
+                            TAKEN
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </div>
-            )}
-
-            {/* Route Summary - Docked at Bottom */}
-            {isRouteSummaryDocked && !pendingStops.length && (
-              <SidebarRouteSummaryCard
-                summary={routeSummary}
-                onUndock={() => setIsRouteSummaryDocked(false)}
-              />
-            )}
+            </div>
           </div>
-        </div>
+        )}
 
         <UploadModal
           isOpen={showUploadModal}
           onClose={() => setShowUploadModal(false)}
+          onCreated={handleFreightCreated}
+          defaultPlannerVanId={selectedVan}
         />
-      </div>
-    </DndProvider>
+        <EditLoadModal
+          isOpen={editingLoad !== null}
+          load={editingLoad}
+          onClose={handleCloseLoadEditor}
+          onSave={handleSaveLoadEditor}
+          onSetInactive={handleSetLoadInactive}
+        />
+        <PalletDetailsModal
+          isOpen={editingPalletLoad !== null}
+          load={editingPalletLoad}
+          onClose={handleClosePalletEditor}
+          onSave={handleSavePalletEditor}
+        />
+    </div>
   );
 }

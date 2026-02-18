@@ -28,7 +28,7 @@ export function RouteComparison({
   const [isExpanded, setIsExpanded] = useState(true);
 
   return (
-    <div className="border-t border-gray-300 bg-white">
+    <div className="flex h-full min-h-0 flex-col bg-white">
       {/* Header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
@@ -51,8 +51,8 @@ export function RouteComparison({
 
       {/* Expandable Content - Horizontal Layout */}
       {isExpanded && (
-        <div className="px-6 py-4">
-          <div className="grid grid-cols-3 gap-4">
+        <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
+          <div className="grid min-w-[980px] grid-cols-3 gap-4">
             {/* Current Route - TAKEN only */}
             <div className="bg-gray-50 border border-gray-200 p-4">
               <div className="flex items-center justify-between mb-3">
@@ -102,72 +102,63 @@ export function RouteComparison({
             </div>
 
             {/* Planned Route - TAKEN + toggled ON */}
-            {hasToggledLoads ? (
-              <div className="bg-blue-50 border-2 border-blue-300 p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
-                    With Toggle ON
-                  </h4>
-                  <span className="text-xs text-blue-600 font-medium">
-                    {toggledOnRoute.stopCount} stops
+            <div className="bg-blue-50 border-2 border-blue-300 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                  With Toggle ON
+                </h4>
+                <span className="text-xs text-blue-600 font-medium">
+                  {toggledOnRoute.stopCount} stops
+                </span>
+              </div>
+              
+              {/* Main Metrics */}
+              <div className="grid grid-cols-2 gap-3 text-xs mb-3 pb-3 border-b border-blue-300">
+                <div className="flex items-center gap-1.5">
+                  <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">{toggledOnRoute.totalKm} km</span>
+                  <span className="text-blue-600 text-[10px] font-medium">
+                    (+{toggledOnRoute.totalKm - currentRoute.totalKm})
                   </span>
                 </div>
-                
-                {/* Main Metrics */}
-                <div className="grid grid-cols-2 gap-3 text-xs mb-3 pb-3 border-b border-blue-300">
-                  <div className="flex items-center gap-1.5">
-                    <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
-                    <span className="text-blue-900 font-semibold">{toggledOnRoute.totalKm} km</span>
-                    <span className="text-blue-600 text-[10px] font-medium">
-                      (+{toggledOnRoute.totalKm - currentRoute.totalKm})
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-blue-500" />
-                    <span className="text-blue-900 font-semibold">{toggledOnRoute.totalTime}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Fuel className="w-3.5 h-3.5 text-blue-500" />
-                    <span className="text-blue-900 font-semibold">{toggledOnRoute.estimatedFuel}L</span>
-                    <span className="text-blue-600 text-[10px] font-medium">
-                      (+{toggledOnRoute.estimatedFuel - currentRoute.estimatedFuel})
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Euro className="w-3.5 h-3.5 text-blue-500" />
-                    <span className="text-blue-900 font-semibold">€{toggledOnRoute.estimatedMargin}</span>
-                    <span className="text-green-600 text-[10px] font-semibold">
-                      (+€{toggledOnRoute.estimatedMargin - currentRoute.estimatedMargin})
-                    </span>
-                  </div>
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">{toggledOnRoute.totalTime}</span>
                 </div>
-                
-                {/* Bottom horizontal metrics */}
-                <div className="flex items-center justify-between text-[11px] text-blue-600 gap-3">
-                  <div className="flex flex-col">
-                    <span className="font-medium text-blue-600">Fuel Cost</span>
-                    <span className="text-blue-900 font-semibold">€{toggledOnRoute.fuelCost}</span>
-                    <span className="text-blue-600 text-[10px]">(+€{toggledOnRoute.fuelCost - currentRoute.fuelCost})</span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="font-medium text-blue-600">Revenue</span>
-                    <span className="text-blue-900 font-semibold">€{toggledOnRoute.totalRevenue}</span>
-                    <span className="text-green-600 font-semibold text-[10px]">(+€{toggledOnRoute.totalRevenue - currentRoute.totalRevenue})</span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="font-medium text-blue-600">€/km</span>
-                    <span className="text-blue-900 font-semibold">{toggledOnRoute.pricePerKm.toFixed(2)}</span>
-                  </div>
+                <div className="flex items-center gap-1.5">
+                  <Fuel className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">{toggledOnRoute.estimatedFuel}L</span>
+                  <span className="text-blue-600 text-[10px] font-medium">
+                    (+{toggledOnRoute.estimatedFuel - currentRoute.estimatedFuel})
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Euro className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">€{toggledOnRoute.estimatedMargin}</span>
+                  <span className="text-green-600 text-[10px] font-semibold">
+                    (+€{toggledOnRoute.estimatedMargin - currentRoute.estimatedMargin})
+                  </span>
                 </div>
               </div>
-            ) : (
-              <div className="bg-gray-50 border border-dashed border-gray-300 p-4 flex items-center justify-center">
-                <div className="text-center text-xs text-gray-500">
-                  <p className="font-medium mb-1">No loads toggled ON</p>
-                  <p>Toggle loads to see planned route</p>
+              
+              {/* Bottom horizontal metrics */}
+              <div className="flex items-center justify-between text-[11px] text-blue-600 gap-3">
+                <div className="flex flex-col">
+                  <span className="font-medium text-blue-600">Fuel Cost</span>
+                  <span className="text-blue-900 font-semibold">€{toggledOnRoute.fuelCost}</span>
+                  <span className="text-blue-600 text-[10px]">(+€{toggledOnRoute.fuelCost - currentRoute.fuelCost})</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-medium text-blue-600">Revenue</span>
+                  <span className="text-blue-900 font-semibold">€{toggledOnRoute.totalRevenue}</span>
+                  <span className="text-green-600 font-semibold text-[10px]">(+€{toggledOnRoute.totalRevenue - currentRoute.totalRevenue})</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-medium text-blue-600">€/km</span>
+                  <span className="text-blue-900 font-semibold">{toggledOnRoute.pricePerKm.toFixed(2)}</span>
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Everything - ALL loads */}
             <div className="bg-purple-50 border border-purple-300 p-4">

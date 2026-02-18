@@ -2,6 +2,7 @@ import { api } from './client';
 import type {
   Load,
   BrokerCompany,
+  BrokerContact,
   Van,
   Driver,
   RoutePlan,
@@ -11,6 +12,7 @@ import type {
 } from '../domain/entities';
 import type { PaginatedResponse } from '../domain/types';
 import type { LoadStatus } from '../domain/enums';
+import type { CreateBrokerContactDto } from '../domain/dto';
 
 // ─── Loads ──────────────────────────────────────────────
 export const loadApi = {
@@ -39,6 +41,11 @@ export const brokerApi = {
   create: (data: unknown) => api.post<BrokerCompany>('/brokers', data),
   update: (id: string, data: unknown) => api.put<BrokerCompany>(`/brokers/${id}`, data),
   delete: (id: string) => api.delete(`/brokers/${id}`),
+};
+
+export const brokerContactApi = {
+  getByCompany: (companyId: string) => api.get<BrokerContact[]>(`/brokers/contacts/company/${companyId}`),
+  create: (data: CreateBrokerContactDto) => api.post<BrokerContact>('/brokers/contacts', data),
 };
 
 // ─── Vans ───────────────────────────────────────────────

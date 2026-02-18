@@ -10,10 +10,16 @@ export interface BrokerCompany extends BaseEntity {
   city: string;
   postcode: string;
   country: string;
+  employeeCount: number | null;
   phone: string | null;
   email: string | null;
   website: string | null;
   transEuId: string | null;
+  transEuPaidOnTime: number | null;
+  transEuPaidWithDelay: number | null;
+  transEuPaymentIssues: number | null;
+  transEuRating: string | null;
+  transEuReviewCount: number | null;
   insuranceCoverage: number | null;
   insuranceProvider: string | null;
   insuranceValidUntil: string | null;

@@ -49,7 +49,6 @@ export interface CanvasStop extends CanvasPosition {
   isSimulation?: boolean;
   kmDelta?: number;
   timeDeltaMinutes?: number;
-  isPending?: boolean;
 }
 
 export interface CanvasRouteSummary extends CanvasPosition {

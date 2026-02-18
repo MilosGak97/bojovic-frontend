@@ -1,4 +1,9 @@
-const API_BASE = 'http://localhost:3000/api';
+const DEFAULT_API_BASE = 'https://bojovic-backend-production.up.railway.app/api';
+const envApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
+const API_BASE = (envApiBase && envApiBase.length > 0 ? envApiBase : DEFAULT_API_BASE).replace(
+  /\/+$/,
+  '',
+);
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

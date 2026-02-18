@@ -1,4 +1,10 @@
-import { LoadStatus, Currency, BodyType, StopType } from '../enums';
+import {
+  LoadStatus,
+  Currency,
+  BodyType,
+  StopType,
+  LoadBoardSource,
+} from '../enums';
 
 export interface CreateLoadStopDto {
   stopType: StopType;
@@ -13,6 +19,8 @@ export interface CreateLoadStopDto {
   contactName?: string;
   contactPhone?: string;
   notes?: string;
+  pallets?: number;
+  transeuLink?: string;
   orderIndex?: number;
 }
 
@@ -42,9 +50,14 @@ export interface CreateLoadPalletDto {
 
 export interface CreateLoadDto {
   referenceNumber: string;
-  externalId?: string;
+  transEuFreightNumber?: string;
   status?: LoadStatus;
+  boardSource?: LoadBoardSource;
   color?: string;
+  brokerageName?: string;
+  originTranseuLink?: string;
+  destTranseuLink?: string;
+  isInactive?: boolean;
 
   pickupAddress: string;
   pickupCity: string;
@@ -64,11 +77,16 @@ export interface CreateLoadDto {
   agreedPrice?: number;
   currency?: Currency;
   paymentTermDays?: number;
+  invoitix?: boolean;
+  valutaCheck?: boolean;
   distanceKm?: number;
   contactPerson?: string;
   contactPhone?: string;
+  contactEmail?: string;
   vehicleMonitoringRequired?: boolean;
   brokerId?: string;
+  brokerContactId?: string;
+  plannerVanId?: string;
   notes?: string;
 
   freightDetails?: CreateLoadFreightDto;

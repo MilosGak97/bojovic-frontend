@@ -1,10 +1,11 @@
 import { BaseEntity } from './base.entity';
-import { VanStatus } from '../enums';
+import { VanStatus, VanType } from '../enums';
 
 export interface Van extends BaseEntity {
   name: string;
   licensePlate: string;
   status: VanStatus;
+  vehicleType: VanType;
 
   // Capacity
   maxWeightKg: number;

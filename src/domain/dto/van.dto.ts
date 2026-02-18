@@ -1,9 +1,10 @@
-import { VanStatus } from '../enums';
+import { VanStatus, VanType } from '../enums';
 
 export interface CreateVanDto {
   name: string;
   licensePlate: string;
   status?: VanStatus;
+  vehicleType?: VanType;
   maxWeightKg: number;
   cargoLengthCm: number;
   cargoWidthCm: number;

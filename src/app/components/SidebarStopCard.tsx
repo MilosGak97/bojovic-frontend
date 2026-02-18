@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { GripVertical, MapPin, Clock, Package, TrendingDown, Link } from 'lucide-react';
+import { GripVertical, ExternalLink, ArrowUp, ArrowDown } from 'lucide-react';
 import { DeltaBadge } from './DeltaBadge';
 
 export interface SidebarStop {
@@ -9,10 +9,17 @@ export interface SidebarStop {
   city: string;
   postcode: string;
   eta: string;
+  etaDate?: string;
+  etaTime?: string;
   color: string;
   loadId: string;
+  brokerage?: string;
+  locationLine?: string;
+  transeuLink?: string;
   pallets: number;
   weight: number;
+  distanceToNext?: number;
+  drivingTime?: string;
   groupId?: string;
   isSimulation?: boolean;
   kmDelta?: number;
@@ -22,19 +29,69 @@ export interface SidebarStop {
 interface SidebarStopCardProps {
   stop: SidebarStop;
   index: number;
+  draggingIndex: number | null;
   isSelected: boolean;
-  isGrouped: boolean;
   isInCargo?: boolean; // Whether this load is loaded in cargo planner
-  isPending?: boolean; // Whether this stop is pending confirmation
   onSelect: (id: string, multiSelect: boolean) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
+  onDraggingIndexChange: (index: number | null) => void;
+  onTranseuAction?: (stopId: string, shouldEdit: boolean) => void;
   onToggleCargo?: (stopId: string) => void; // Toggle cargo visibility
 }
 
-export function SidebarStopCard({ stop, index, isSelected, isGrouped, isInCargo, isPending, onSelect, onReorder, onToggleCargo }: SidebarStopCardProps) {
+const hexToRgba = (hex: string, alpha: number): string => {
+  const normalized = hex.trim().replace('#', '');
+  const fullHex =
+    normalized.length === 3
+      ? normalized
+          .split('')
+          .map((char) => char + char)
+          .join('')
+      : normalized;
+
+  if (!/^[0-9a-fA-F]{6}$/.test(fullHex)) {
+    return `rgba(148, 163, 184, ${alpha})`;
+  }
+
+  const value = parseInt(fullHex, 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+export function SidebarStopCard({
+  stop,
+  index,
+  draggingIndex,
+  isSelected,
+  isInCargo,
+  onSelect,
+  onReorder,
+  onDraggingIndexChange,
+  onTranseuAction,
+  onToggleCargo,
+}: SidebarStopCardProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const itemRef = useRef<HTMLDivElement>(null);
+  const locationLine = stop.locationLine ?? `DE, ${stop.postcode}, ${stop.city}`;
+  const etaDate = stop.etaDate ?? '—';
+  const etaTime = stop.etaTime ?? '—';
+  const brokerBadgeStyle = {
+    backgroundColor: hexToRgba(stop.color, 0.12),
+    borderColor: hexToRgba(stop.color, 0.3),
+    color: stop.color,
+  };
+
+  const handleCopyLocation = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(locationLine);
+    } catch {
+      // Ignore clipboard failures in unsupported environments.
+    }
+  };
 
   const handleClick = (e: React.MouseEvent) => {
     const multiSelect = e.ctrlKey || e.shiftKey;
@@ -43,36 +100,44 @@ export function SidebarStopCard({ stop, index, isSelected, isGrouped, isInCargo,
 
   const handleDragStart = (e: React.DragEvent) => {
     setIsDragging(true);
+    onDraggingIndexChange(index);
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('stopIndex', index.toString());
-    e.dataTransfer.setData('application/json', JSON.stringify({
-      type: 'stop',
-      stop: stop,
-    }));
+    e.dataTransfer.setData('text/plain', stop.id);
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
-    setDragOverIndex(null);
+    setIsDragOver(false);
+    onDraggingIndexChange(null);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    setDragOverIndex(index);
+    setIsDragOver(true);
+
+    if (draggingIndex === null || draggingIndex === index) return;
+    const bounds = itemRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+
+    const midY = (bounds.bottom - bounds.top) / 2;
+    const pointerY = e.clientY - bounds.top;
+
+    // Reorder only after crossing the midpoint to avoid jumpiness.
+    if (draggingIndex < index && pointerY < midY) return;
+    if (draggingIndex > index && pointerY > midY) return;
+
+    onReorder(draggingIndex, index);
+    onDraggingIndexChange(index);
   };
 
   const handleDragLeave = () => {
-    setDragOverIndex(null);
+    setIsDragOver(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    const fromIndex = parseInt(e.dataTransfer.getData('stopIndex'));
-    if (!isNaN(fromIndex) && fromIndex !== index) {
-      onReorder(fromIndex, index);
-    }
-    setDragOverIndex(null);
+    setIsDragOver(false);
   };
 
   return (
@@ -85,11 +150,11 @@ export function SidebarStopCard({ stop, index, isSelected, isGrouped, isInCargo,
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onClick={handleClick}
-      className={`relative bg-white border-b border-gray-200 cursor-move transition-all ${
+      className={`relative bg-white border-b border-gray-200 cursor-move transition-[background-color,box-shadow,opacity,transform] ${
         isDragging ? 'opacity-40 scale-95' : ''
-      } ${dragOverIndex === index ? 'border-t-4 border-t-blue-500 bg-blue-50' : ''} ${
-        isSelected ? 'bg-blue-100 ring-2 ring-inset ring-blue-500' : ''
-      } ${isGrouped && !isSelected ? 'bg-amber-50' : ''}`}
+      } ${isDragOver && draggingIndex !== index ? 'bg-blue-50 shadow-[inset_0_0_0_2px_rgba(147,197,253,1)]' : ''} ${
+        isSelected ? 'bg-blue-100 shadow-[inset_0_0_0_2px_rgba(59,130,246,1)]' : ''
+      }`}
       style={{
         borderLeft: `4px solid ${stop.color}`,
       }}
@@ -128,49 +193,57 @@ export function SidebarStopCard({ stop, index, isSelected, isGrouped, isInCargo,
                   {index + 1}
                 </span>
                 <span
-                  className={`px-1.5 py-0.5 text-xs font-medium ${
-                    stop.type === 'pickup'
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-orange-100 text-orange-700'
-                  }`}
+                  className="inline-flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-semibold"
+                  style={brokerBadgeStyle}
                 >
                   {stop.type === 'pickup' ? (
-                    <span className="flex items-center gap-1">
-                      <TrendingDown className="w-3 h-3 rotate-180" />
-                      PICKUP
-                    </span>
+                    <ArrowUp className="h-3.5 w-3.5 shrink-0" />
                   ) : (
-                    <span className="flex items-center gap-1">
-                      <Package className="w-3 h-3" />
-                      DELIVERY
-                    </span>
+                    <ArrowDown className="h-3.5 w-3.5 shrink-0" />
                   )}
+                  <span className="truncate">{stop.brokerage || 'Brokerage not set'}</span>
                 </span>
               </div>
               
-              <div className="flex items-center gap-2">
-                {isGrouped && (
-                  <Link className="w-3.5 h-3.5 text-amber-600" />
-                )}
-                {isPending && (
-                  <div 
-                    className="w-2.5 h-2.5 rounded-full bg-yellow-500 shadow-md" 
-                    title="Pending confirmation"
-                  />
-                )}
-              </div>
+              <div className="flex items-center gap-2" />
             </div>
 
             <div className="space-y-1 text-xs">
-              <div className="flex items-center gap-1 text-gray-900 font-medium">
-                <MapPin className="w-3 h-3" />
-                <span>{stop.city}</span>
-                <span className="text-gray-500 font-normal">{stop.postcode}</span>
+              <div className="flex items-center gap-1 text-gray-500">
+                <button
+                  type="button"
+                  onClick={handleCopyLocation}
+                  className="truncate text-left text-xs font-normal leading-4 text-gray-500 hover:text-gray-700"
+                  title="Copy location"
+                >
+                  {locationLine}
+                </button>
+                {onTranseuAction && (
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onTranseuAction(stop.id, event.altKey);
+                    }}
+                    className={`rounded p-0.5 transition-colors ${
+                      stop.transeuLink
+                        ? 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                        : 'text-gray-300 hover:bg-gray-100 hover:text-gray-500'
+                    }`}
+                    title={
+                      stop.transeuLink
+                        ? 'Open Transeu link (Alt+Click to edit)'
+                        : 'Add Transeu link'
+                    }
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
 
-              <div className="flex items-center gap-1 text-gray-600">
-                <Clock className="w-3 h-3" />
-                <span>ETA: {stop.eta}</span>
+              <div className="flex items-center gap-1 text-gray-500">
+                <span className="text-xs font-normal leading-4 text-gray-500">
+                  ETA: {etaDate} {etaTime}
+                </span>
               </div>
 
               <div className="flex items-center justify-between pt-0.5 text-gray-500">

@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 import { GripVertical, X, RotateCw, Package, Plus, AlertTriangle } from 'lucide-react';
-import { StopTimelineBar } from './StopTimelineBar';
-import type { CanvasLoad } from './CanvasLoadCard';
 
 interface CargoItem {
   id: string;
@@ -24,7 +22,12 @@ interface RouteStop {
   city: string;
   loadId: string;
   pallets: number;
-  type: 'pickup' | 'delivery';
+  palletDimensions?: Array<{
+    width: number;
+    height: number;
+  }>;
+  type: 'pickup' | 'delivery' | 'extra';
+  extraAction?: 'pickup' | 'dropoff';
   color: string;
   label: string;
 }
@@ -36,8 +39,6 @@ interface CanvasVanCargoProps {
   onMove: (x: number, y: number) => void;
   scale: number;
   stopNumber?: number;
-  loadToAdd?: CanvasLoad | null;
-  onLoadAdded?: () => void;
   routedStops?: RouteStop[];
   onCargoLoadsChange?: (loadIds: string[]) => void; // New callback to report loaded loads
   selectedStopId?: string; // Which stop to show cargo state for
@@ -51,14 +52,24 @@ const EURO_PALLET_WIDTH = 80; // cm
 const SCALE = 0.8; // visual scale for display
 const GRID_SIZE = 10; // 10cm grid
 
-export function CanvasVanCargo({ vanId, x, y, onMove, scale, stopNumber, loadToAdd, onLoadAdded, routedStops, onCargoLoadsChange, selectedStopId, onStopSelect }: CanvasVanCargoProps) {
+export function CanvasVanCargo({
+  vanId,
+  x,
+  y,
+  onMove,
+  scale,
+  stopNumber,
+  routedStops,
+  onCargoLoadsChange,
+  selectedStopId,
+  onStopSelect,
+}: CanvasVanCargoProps) {
   const [cargoItems, setCargoItems] = useState<CargoItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showAddCustomPallet, setShowAddCustomPallet] = useState(false);
   const [customPalletWidth, setCustomPalletWidth] = useState(120);
   const [customPalletHeight, setCustomPalletHeight] = useState(80);
-  const [loadedStopIds, setLoadedStopIds] = useState<Set<string>>(new Set());
   const [draggingCargoId, setDraggingCargoId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [tempPosition, setTempPosition] = useState({ x: 0, y: 0 });
@@ -97,110 +108,152 @@ export function CanvasVanCargo({ vanId, x, y, onMove, scale, stopNumber, loadToA
     });
   };
 
-  // Auto-load from routed stops (only once per stop)
-  useEffect(() => {
-    if (routedStops && routedStops.length > 0) {
-      const itemsToAdd: CargoItem[] = [];
-      const newLoadedIds = new Set(loadedStopIds);
-      
-      routedStops.forEach((stop) => {
-        const stopKey = `${stop.loadId}-${stop.type}`;
-        
-        // Only add if this stop hasn't been loaded yet and it's a pickup
-        if (stop.type === 'pickup' && !loadedStopIds.has(stopKey)) {
-          newLoadedIds.add(stopKey);
-          
-          // Add pallets for pickups
-          for (let i = 0; i < stop.pallets; i++) {
-            itemsToAdd.push({
-              id: `auto-${stop.loadId}-${i}-${Date.now()}-${Math.random()}`,
-              loadId: stop.loadId,
+  const orderedRoutedStops = [...(routedStops ?? [])].sort((a, b) => a.number - b.number);
+  const routedStopsSignature = orderedRoutedStops
+    .map((stop) => {
+      const palletSignature = (stop.palletDimensions ?? [])
+        .map((pallet) => `${pallet.width}x${pallet.height}`)
+        .join(',');
+      return `${stop.id}:${stop.number}:${stop.type}:${stop.loadId}:${stop.pallets}:${stop.color}:${stop.label}:${palletSignature}`;
+    })
+    .join('|');
+
+  const getPickupPlan = () => {
+    const pickupTotals = new Map<
+      string,
+      { pallets: Array<{ width: number; height: number }>; color: string; label: string }
+    >();
+
+    orderedRoutedStops.forEach((stop) => {
+      const isPickupLike =
+        stop.type === 'pickup' || (stop.type === 'extra' && stop.extraAction === 'pickup');
+      if (!isPickupLike) return;
+
+      const stopPallets =
+        stop.palletDimensions && stop.palletDimensions.length > 0
+          ? stop.palletDimensions
+          : Array.from({ length: Math.max(0, stop.pallets) }, () => ({
               width: EURO_PALLET_LENGTH,
               height: EURO_PALLET_WIDTH,
-              color: stop.color,
-              x: 0,
-              y: 0,
-              rotated: false,
-              label: stop.label,
-              hasConflict: false,
-              isOverflow: false,
-              stopId: stop.id,
-            });
-          }
-        }
-      });
-      
-      if (itemsToAdd.length > 0) {
-        setLoadedStopIds(newLoadedIds);
-        placeItemsWithConflictDetection(itemsToAdd);
-      }
-    }
-  }, [routedStops]);
+            }));
 
-  // Remove cargo items when their stops are removed
+      const existing = pickupTotals.get(stop.loadId);
+      if (existing) {
+        pickupTotals.set(stop.loadId, {
+          ...existing,
+          pallets: [...existing.pallets, ...stopPallets],
+        });
+      } else {
+        pickupTotals.set(stop.loadId, {
+          pallets: [...stopPallets],
+          color: stop.color,
+          label: stop.label,
+        });
+      }
+    });
+
+    return pickupTotals;
+  };
+
+  // Keep base cargo list aligned with route pickup definitions.
   useEffect(() => {
-    if (routedStops) {
-      const activeLoadIds = new Set(routedStops.map(stop => stop.loadId));
-      
-      setCargoItems(prev => {
-        const filtered = prev.filter(item => activeLoadIds.has(item.loadId));
-        // Only update if something actually changed
-        if (filtered.length !== prev.length) {
-          return filtered;
-        }
-        return prev;
-      });
-      
-      // Clean up loaded stop IDs
-      setLoadedStopIds(prev => {
-        const newSet = new Set<string>();
-        prev.forEach(stopKey => {
-          const loadId = stopKey.split('-')[0];
-          if (activeLoadIds.has(loadId)) {
-            newSet.add(stopKey);
+    if (!orderedRoutedStops.length) {
+      setCargoItems((prev) => prev.filter((item) => item.loadId === 'CUSTOM'));
+      return;
+    }
+
+    const pickupPlan = getPickupPlan();
+
+    setCargoItems((prev) => {
+      const next = prev.filter(
+        (item) => item.loadId === 'CUSTOM' || pickupPlan.has(item.loadId),
+      );
+
+      pickupPlan.forEach((plan, loadId) => {
+        const loadItemIndexes = next
+          .map((item, index) => ({ item, index }))
+          .filter(({ item }) => item.loadId === loadId)
+          .map(({ index }) => index);
+
+        loadItemIndexes.forEach((index, palletIndex) => {
+          if (palletIndex >= plan.pallets.length) return;
+          const targetPallet = plan.pallets[palletIndex];
+          const currentItem = next[index];
+
+          if (
+            currentItem.width !== targetPallet.width ||
+            currentItem.height !== targetPallet.height ||
+            currentItem.color !== plan.color ||
+            currentItem.label !== plan.label
+          ) {
+            next[index] = {
+              ...currentItem,
+              width: targetPallet.width,
+              height: targetPallet.height,
+              color: plan.color,
+              label: plan.label,
+            };
           }
         });
-        // Only update if something actually changed
-        if (newSet.size !== prev.size) {
-          return newSet;
+
+        const excess = loadItemIndexes.length - plan.pallets.length;
+
+        if (excess > 0) {
+          let toRemove = excess;
+          for (let i = loadItemIndexes.length - 1; i >= 0 && toRemove > 0; i -= 1) {
+            const removeIndex = loadItemIndexes[i];
+            next.splice(removeIndex, 1);
+            toRemove -= 1;
+          }
         }
-        return prev;
       });
-    }
-  }, [routedStops?.length, routedStops?.map(s => s.loadId).join(',')]);
 
-  // Add load when loadToAdd changes
+      return next;
+    });
+  }, [routedStopsSignature]);
+
+  // Add missing pallets for newly planned pickup stops.
   useEffect(() => {
-    if (loadToAdd) {
-      addLoadToCargo(loadToAdd);
-      if (onLoadAdded) {
-        onLoadAdded();
-      }
-    }
-  }, [loadToAdd]);
+    if (!orderedRoutedStops.length) return;
 
-  const addLoadToCargo = (load: CanvasLoad) => {
-    if (!load.id || !load.pallets) return;
-    
+    const pickupPlan = getPickupPlan();
+    const existingCounts = new Map<string, number>();
+    cargoItems.forEach((item) => {
+      if (item.loadId === 'CUSTOM') return;
+      existingCounts.set(item.loadId, (existingCounts.get(item.loadId) ?? 0) + 1);
+    });
+
     const itemsToAdd: CargoItem[] = [];
-    for (let i = 0; i < load.pallets; i++) {
-      itemsToAdd.push({
-        id: `cargo-${load.id}-${i}-${Date.now()}`,
-        loadId: load.id,
-        width: EURO_PALLET_LENGTH,
-        height: EURO_PALLET_WIDTH,
-        color: load.color,
-        x: 0,
-        y: 0,
-        rotated: false,
-        label: `${load.originCity.substring(0, 3)}-${load.destCity.substring(0, 3)}`,
-        hasConflict: false,
-        isOverflow: false,
-      });
+    pickupPlan.forEach((plan, loadId) => {
+      const existing = existingCounts.get(loadId) ?? 0;
+      const missing = plan.pallets.length - existing;
+
+      for (let i = 0; i < missing; i += 1) {
+        const targetPallet = plan.pallets[existing + i] ?? {
+          width: EURO_PALLET_LENGTH,
+          height: EURO_PALLET_WIDTH,
+        };
+
+        itemsToAdd.push({
+          id: `auto-${loadId}-${Date.now()}-${i}-${Math.random()}`,
+          loadId,
+          width: targetPallet.width,
+          height: targetPallet.height,
+          color: plan.color,
+          x: 0,
+          y: 0,
+          rotated: false,
+          label: plan.label,
+          hasConflict: false,
+          isOverflow: false,
+        });
+      }
+    });
+
+    if (itemsToAdd.length > 0) {
+      placeItemsWithConflictDetection(itemsToAdd);
     }
-    
-    placeItemsWithConflictDetection(itemsToAdd);
-  };
+  }, [routedStopsSignature, cargoItems]);
 
   const placeItemsWithConflictDetection = (itemsToAdd: CargoItem[]) => {
     setCargoItems((prev) => {
@@ -625,18 +678,72 @@ export function CanvasVanCargo({ vanId, x, y, onMove, scale, stopNumber, loadToA
     };
   }, [draggingCargoId, dragOffset, tempPosition, cargoItems]);
 
-  const totalWeight = cargoItems.filter(i => !i.isOverflow).length * 400; // mock
-  const totalLDM = (cargoItems.filter(i => !i.isOverflow).reduce((sum, item) => sum + item.height, 0) / 100).toFixed(1);
-  const usedPalletSlots = cargoItems.filter(i => !i.isOverflow).length;
-  const overflowCount = cargoItems.filter(i => i.isOverflow).length;
+  const effectiveSelectedStopId =
+    selectedStopId && orderedRoutedStops.some((stop) => stop.id === selectedStopId)
+      ? selectedStopId
+      : orderedRoutedStops.length > 0
+        ? orderedRoutedStops[0].id
+        : undefined;
 
-  // Get unique loads in cargo
+  useEffect(() => {
+    if (!onStopSelect || !effectiveSelectedStopId) return;
+    if (selectedStopId !== effectiveSelectedStopId) {
+      onStopSelect(effectiveSelectedStopId);
+    }
+  }, [effectiveSelectedStopId, onStopSelect, selectedStopId]);
+
+  const selectedStopIndex = effectiveSelectedStopId
+    ? orderedRoutedStops.findIndex((stop) => stop.id === effectiveSelectedStopId)
+    : -1;
+
+  const palletsAfterSelectedStop = new Map<string, number>();
+  const stopsToApply =
+    selectedStopIndex >= 0 ? orderedRoutedStops.slice(0, selectedStopIndex + 1) : [];
+
+  stopsToApply.forEach((stop) => {
+    const currentCount = palletsAfterSelectedStop.get(stop.loadId) ?? 0;
+    const palletDelta =
+      stop.type === 'pickup'
+        ? stop.pallets
+        : stop.type === 'delivery'
+          ? -stop.pallets
+          : stop.extraAction === 'pickup'
+            ? stop.pallets
+            : -stop.pallets;
+    const nextCount = Math.max(0, currentCount + palletDelta);
+    palletsAfterSelectedStop.set(stop.loadId, nextCount);
+  });
+
+  const shownPerLoad = new Map<string, number>();
+  const visibleCargoItems = cargoItems.filter((item) => {
+    if (item.loadId === 'CUSTOM') return true;
+
+    const allowedCount = palletsAfterSelectedStop.get(item.loadId) ?? 0;
+    if (allowedCount <= 0) return false;
+
+    const currentlyShown = shownPerLoad.get(item.loadId) ?? 0;
+    if (currentlyShown >= allowedCount) return false;
+
+    shownPerLoad.set(item.loadId, currentlyShown + 1);
+    return true;
+  });
+
+  const cargoInGrid = visibleCargoItems.filter((item) => !item.isOverflow);
+  const cargoOverflow = visibleCargoItems.filter((item) => item.isOverflow);
+  const totalWeight = cargoInGrid.length * 400; // mock
+  const totalLDM = (
+    cargoInGrid.reduce((sum, item) => sum + item.height, 0) / 100
+  ).toFixed(1);
+  const usedPalletSlots = cargoInGrid.length;
+  const overflowCount = cargoOverflow.length;
+
+  // Get unique loads in visible cargo snapshot
   const loadsInCargo = Array.from(
-    new Set(cargoItems.map((item) => item.loadId))
+    new Set(visibleCargoItems.map((item) => item.loadId))
   ).map((loadId) => {
-    const items = cargoItems.filter((item) => item.loadId === loadId);
-    const loadedItems = items.filter(i => !i.isOverflow);
-    const overflowItems = items.filter(i => i.isOverflow);
+    const items = visibleCargoItems.filter((item) => item.loadId === loadId);
+    const loadedItems = items.filter((item) => !item.isOverflow);
+    const overflowItems = items.filter((item) => item.isOverflow);
     return {
       loadId,
       palletCount: items.length,
@@ -647,13 +754,12 @@ export function CanvasVanCargo({ vanId, x, y, onMove, scale, stopNumber, loadToA
     };
   });
 
-  const cargoInGrid = cargoItems.filter(i => !i.isOverflow);
-  const cargoOverflow = cargoItems.filter(i => i.isOverflow);
-
   // Notify parent of loaded loads whenever cargoItems changes
   useEffect(() => {
     if (onCargoLoadsChange) {
-      const uniqueLoadIds = Array.from(new Set(cargoItems.map(item => item.loadId)));
+      const uniqueLoadIds = Array.from(new Set(cargoItems.map((item) => item.loadId))).filter(
+        (loadId) => loadId !== 'CUSTOM',
+      );
       onCargoLoadsChange(uniqueLoadIds);
     }
   }, [cargoItems, onCargoLoadsChange]);
@@ -721,14 +827,24 @@ export function CanvasVanCargo({ vanId, x, y, onMove, scale, stopNumber, loadToA
           <GripVertical className="w-4 h-4 text-gray-400" />
           
           {/* Stop Stepper */}
-          {routedStops && routedStops.length > 0 && (
+          {orderedRoutedStops.length > 0 && (
             <div className="flex items-center gap-1 ml-2">
-              {routedStops.map((stop, idx) => (
+              {orderedRoutedStops.map((stop, idx) => {
+                const stopTypeLabel =
+                  stop.type === 'pickup'
+                    ? 'pickup'
+                    : stop.type === 'delivery'
+                      ? 'delivery'
+                      : stop.extraAction === 'pickup'
+                        ? 'extra pickup'
+                        : 'extra dropoff';
+
+                return (
                 <div key={stop.id} className="flex items-center">
                   {/* Stop number - visual only, using sequential index */}
                   <div
                     className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold bg-gray-100 text-gray-500 border border-gray-200"
-                    title={`Stop ${idx + 1}: ${stop.type} at ${stop.city}`}
+                    title={`Stop ${idx + 1}: ${stopTypeLabel} at ${stop.city}`}
                   >
                     {idx + 1}
                   </div>
@@ -741,14 +857,14 @@ export function CanvasVanCargo({ vanId, x, y, onMove, scale, stopNumber, loadToA
                       }
                     }}
                     className={`w-3 h-3 rounded-full mx-1 transition-all ${
-                      selectedStopId === stop.id
+                      effectiveSelectedStopId === stop.id
                         ? 'bg-blue-600 shadow-md scale-125 ring-2 ring-blue-200'
                         : 'bg-gray-300 hover:bg-blue-400 hover:scale-110'
                     }`}
-                    title={`View cargo after Stop ${idx + 1} (${stop.type === 'pickup' ? 'pickup' : 'delivery'} at ${stop.city})`}
+                    title={`View cargo after Stop ${idx + 1} (${stopTypeLabel} at ${stop.city})`}
                   />
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>

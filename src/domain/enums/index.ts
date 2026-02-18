@@ -11,6 +11,13 @@ export enum LoadStatus {
   NOT_INTERESTED = 'NOT_INTERESTED',
 }
 
+export enum LoadBoardSource {
+  TRANS_EU = 'TRANS_EU',
+  TIMOCOM = 'TIMOCOM',
+  MANUAL = 'MANUAL',
+  OTHER = 'OTHER',
+}
+
 export enum StopType {
   PICKUP = 'PICKUP',
   DELIVERY = 'DELIVERY',
@@ -112,6 +119,12 @@ export enum DocumentCategory {
 }
 
 // ─── Van / Driver ───────────────────────────────────────
+export enum VanType {
+  VAN_3_5T = 'VAN_3_5T',
+  TRUCK_7T = 'TRUCK_7T',
+  CARGO_VAN = 'CARGO_VAN',
+}
+
 export enum VanStatus {
   AVAILABLE = 'AVAILABLE',
   ON_ROUTE = 'ON_ROUTE',

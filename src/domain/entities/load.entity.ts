@@ -1,12 +1,24 @@
 import { BaseEntity } from './base.entity';
-import { LoadStatus, StopType, BodyType, Currency } from '../enums';
-import { BrokerCompany } from './broker.entity';
+import {
+  LoadStatus,
+  StopType,
+  BodyType,
+  Currency,
+  LoadBoardSource,
+} from '../enums';
+import { BrokerCompany, BrokerContact } from './broker.entity';
+import { Van } from './van.entity';
 
 export interface Load extends BaseEntity {
   referenceNumber: string;
-  externalId: string | null;
+  transEuFreightNumber: string | null;
   status: LoadStatus;
+  boardSource: LoadBoardSource;
   color: string | null;
+  brokerageName: string | null;
+  originTranseuLink: string | null;
+  destTranseuLink: string | null;
+  isInactive: boolean;
 
   // Pickup
   pickupAddress: string;
@@ -29,6 +41,8 @@ export interface Load extends BaseEntity {
   agreedPrice: number | null;
   currency: Currency;
   paymentTermDays: number | null;
+  invoitix: boolean;
+  valutaCheck: boolean;
   margin: number | null;
   pricePerKm: number | null;
 
@@ -36,12 +50,17 @@ export interface Load extends BaseEntity {
   distanceKm: number | null;
   contactPerson: string | null;
   contactPhone: string | null;
+  contactEmail: string | null;
   vehicleMonitoringRequired: boolean;
   notes: string | null;
   brokerId: string | null;
+  brokerContactId: string | null;
+  plannerVanId: string | null;
 
   // Relations
   broker?: BrokerCompany | null;
+  brokerContact?: BrokerContact | null;
+  plannerVan?: Van | null;
   stops?: LoadStop[];
   freightDetails?: LoadFreightDetails;
   pallets?: LoadPallet[];
@@ -61,6 +80,8 @@ export interface LoadStop extends BaseEntity {
   contactName: string | null;
   contactPhone: string | null;
   notes: string | null;
+  pallets: number | null;
+  transeuLink: string | null;
   orderIndex: number;
 }
 
