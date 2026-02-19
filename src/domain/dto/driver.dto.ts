@@ -1,4 +1,4 @@
-import { DriverStatus } from '../enums';
+import { DriverStatus, Currency } from '../enums';
 
 export interface CreateDriverDto {
   firstName: string;
@@ -14,6 +14,8 @@ export interface CreateDriverDto {
   adrCertified?: boolean;
   adrValidUntil?: string;
   hiredAt?: string;
+  monthlySalary?: number;
+  salaryCurrency?: Currency;
   notes?: string;
 }
 

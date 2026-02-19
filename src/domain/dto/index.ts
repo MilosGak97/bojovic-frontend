@@ -6,3 +6,9 @@ export type { CreateRoutePlanDto, UpdateRoutePlanDto, CreateRouteStopDto } from 
 export type { CreateDispatchAssignmentDto, UpdateDispatchAssignmentDto } from './dispatch.dto';
 export type { CreateDocumentDto, UpdateDocumentDto } from './document.dto';
 export type { CreatePaymentRecordDto, UpdatePaymentRecordDto } from './payment.dto';
+export type {
+  CreateExpenseDto,
+  UpdateExpenseDto,
+  CreateDriverPayRecordDto,
+  UpdateDriverPayRecordDto,
+} from './finance.dto';

@@ -9,10 +9,24 @@ import type {
   DispatchAssignment,
   PaymentRecord,
   Document,
+  Expense,
+  DriverPayRecord,
+  PeriodSummary,
+  ExpenseBreakdownItem,
+  CashFlow,
+  LoadProfit,
+  VanCostSummary,
+  MonthlyPnLItem,
 } from '../domain/entities';
 import type { PaginatedResponse } from '../domain/types';
-import type { LoadStatus } from '../domain/enums';
-import type { CreateBrokerContactDto } from '../domain/dto';
+import type { LoadStatus, ExpenseCategory, ExpenseType } from '../domain/enums';
+import type {
+  CreateBrokerContactDto,
+  CreateExpenseDto,
+  UpdateExpenseDto,
+  CreateDriverPayRecordDto,
+  UpdateDriverPayRecordDto,
+} from '../domain/dto';
 
 // ─── Loads ──────────────────────────────────────────────
 export const loadApi = {
@@ -115,4 +129,78 @@ export const documentApi = {
     api.get<Document[]>(`/documents?category=${category}&entityId=${entityId}`),
   create: (data: unknown) => api.post<Document>('/documents', data),
   delete: (id: string) => api.delete(`/documents/${id}`),
+};
+
+// ─── Finance ────────────────────────────────────────────
+export const expenseApi = {
+  create: (data: CreateExpenseDto) => api.post<Expense>('/finance/expenses', data),
+  getAll: (params?: {
+    vanId?: string;
+    driverId?: string;
+    loadId?: string;
+    category?: ExpenseCategory;
+    type?: ExpenseType;
+    from?: string;
+    to?: string;
+    isRecurring?: boolean;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.vanId) query.set('vanId', params.vanId);
+    if (params?.driverId) query.set('driverId', params.driverId);
+    if (params?.loadId) query.set('loadId', params.loadId);
+    if (params?.category) query.set('category', params.category);
+    if (params?.type) query.set('type', params.type);
+    if (params?.from) query.set('from', params.from);
+    if (params?.to) query.set('to', params.to);
+    if (params?.isRecurring !== undefined) query.set('isRecurring', String(params.isRecurring));
+    const qs = query.toString();
+    return api.get<Expense[]>(`/finance/expenses${qs ? `?${qs}` : ''}`);
+  },
+  getRecurring: () => api.get<Expense[]>('/finance/expenses/recurring'),
+  getOne: (id: string) => api.get<Expense>(`/finance/expenses/${id}`),
+  update: (id: string, data: UpdateExpenseDto) => api.put<Expense>(`/finance/expenses/${id}`, data),
+  delete: (id: string) => api.delete(`/finance/expenses/${id}`),
+};
+
+export const driverPayApi = {
+  create: (data: CreateDriverPayRecordDto) => api.post<DriverPayRecord>('/finance/driver-pay', data),
+  getAll: (params?: { driverId?: string; year?: number; month?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.driverId) query.set('driverId', params.driverId);
+    if (params?.year) query.set('year', String(params.year));
+    if (params?.month) query.set('month', String(params.month));
+    const qs = query.toString();
+    return api.get<DriverPayRecord[]>(`/finance/driver-pay${qs ? `?${qs}` : ''}`);
+  },
+  getOne: (id: string) => api.get<DriverPayRecord>(`/finance/driver-pay/${id}`),
+  update: (id: string, data: UpdateDriverPayRecordDto) =>
+    api.put<DriverPayRecord>(`/finance/driver-pay/${id}`, data),
+  markPaid: (id: string, paidDate?: string) =>
+    api.patch<DriverPayRecord>(`/finance/driver-pay/${id}/paid`, { paidDate }),
+};
+
+export const financeReportApi = {
+  getSummary: (from: string, to: string) =>
+    api.get<PeriodSummary>(`/finance/reports/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  getExpenseBreakdown: (from: string, to: string) =>
+    api.get<ExpenseBreakdownItem[]>(
+      `/finance/reports/expense-breakdown?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
+  getCashFlow: (from: string, to: string) =>
+    api.get<CashFlow>(`/finance/reports/cash-flow?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  getLoadProfit: (loadId: string) => api.get<LoadProfit>(`/finance/reports/load-profit/${loadId}`),
+  getLoadProfits: (from: string, to: string) =>
+    api.get<LoadProfit[]>(
+      `/finance/reports/load-profits?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
+  getVanCosts: (vanId: string, from: string, to: string) =>
+    api.get<VanCostSummary>(
+      `/finance/reports/van-costs/${vanId}?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
+  getAllVanCosts: (from: string, to: string) =>
+    api.get<VanCostSummary[]>(
+      `/finance/reports/van-costs?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
+  getMonthlyPnL: (year: number) =>
+    api.get<MonthlyPnLItem[]>(`/finance/reports/monthly-pnl?year=${year}`),
 };

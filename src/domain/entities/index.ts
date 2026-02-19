@@ -7,3 +7,13 @@ export type { RoutePlan, RouteStop, RouteSimulation, CargoPlacement } from './ro
 export type { DispatchAssignment } from './dispatch.entity';
 export type { Document } from './document.entity';
 export type { PaymentRecord, BrokerPaymentStats } from './payment.entity';
+export type {
+  Expense,
+  DriverPayRecord,
+  PeriodSummary,
+  ExpenseBreakdownItem,
+  CashFlow,
+  LoadProfit,
+  VanCostSummary,
+  MonthlyPnLItem,
+} from './finance.entity';

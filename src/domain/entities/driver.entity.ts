@@ -1,5 +1,5 @@
 import { BaseEntity } from './base.entity';
-import { DriverStatus } from '../enums';
+import { DriverStatus, Currency } from '../enums';
 
 export interface Driver extends BaseEntity {
   firstName: string;
@@ -15,6 +15,8 @@ export interface Driver extends BaseEntity {
   adrCertified: boolean;
   adrValidUntil: string | null;
   hiredAt: string | null;
+  monthlySalary: number | null;
+  salaryCurrency: Currency | null;
   notes: string | null;
   isActive: boolean;
 }

@@ -148,3 +148,31 @@ export enum DispatchStatus {
   COMPLETED = 'COMPLETED',
   CANCELED = 'CANCELED',
 }
+
+// ─── Finance ───────────────────────────────────────────
+export enum ExpenseCategory {
+  FUEL = 'FUEL',
+  TOLL = 'TOLL',
+  MAINTENANCE = 'MAINTENANCE',
+  REPAIR = 'REPAIR',
+  PARKING = 'PARKING',
+  INSURANCE = 'INSURANCE',
+  LEASING = 'LEASING',
+  PERMITS = 'PERMITS',
+  OFFICE = 'OFFICE',
+  SOFTWARE = 'SOFTWARE',
+  SALARY = 'SALARY',
+  PER_DIEM = 'PER_DIEM',
+  OTHER = 'OTHER',
+}
+
+export enum ExpenseType {
+  FIXED = 'FIXED',
+  VARIABLE = 'VARIABLE',
+  TRIP_LINKED = 'TRIP_LINKED',
+}
+
+export enum DriverPayStatus {
+  PENDING = 'PENDING',
+  PAID = 'PAID',
+}

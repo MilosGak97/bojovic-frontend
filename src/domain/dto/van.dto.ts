@@ -1,4 +1,4 @@
-import { VanStatus, VanType } from '../enums';
+import { VanStatus, VanType, Currency } from '../enums';
 
 export interface CreateVanDto {
   name: string;
@@ -19,6 +19,9 @@ export interface CreateVanDto {
   nextServiceDate?: string;
   insuranceValidUntil?: string;
   technicalInspectionUntil?: string;
+  monthlyLeasingCost?: number;
+  monthlyInsuranceCost?: number;
+  costCurrency?: Currency;
   notes?: string;
 }
 

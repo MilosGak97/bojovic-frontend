@@ -1,5 +1,5 @@
 import { BaseEntity } from './base.entity';
-import { VanStatus, VanType } from '../enums';
+import { VanStatus, VanType, Currency } from '../enums';
 
 export interface Van extends BaseEntity {
   name: string;
@@ -24,5 +24,8 @@ export interface Van extends BaseEntity {
   nextServiceDate: string | null;
   insuranceValidUntil: string | null;
   technicalInspectionUntil: string | null;
+  monthlyLeasingCost: number | null;
+  monthlyInsuranceCost: number | null;
+  costCurrency: Currency | null;
   notes: string | null;
 }
