@@ -8,6 +8,7 @@ const QUICK_NAV_ITEMS = [
   { label: 'Vehicles', to: '/fleet-monitor' },
   { label: 'Broker Desk', to: '/broker-desk' },
   { label: 'Payments', to: '/payments' },
+  { label: 'Finance', to: '/finance' },
 ];
 
 export function ThinModuleMenu() {

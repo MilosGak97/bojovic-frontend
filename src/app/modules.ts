@@ -42,4 +42,10 @@ export const dashboardModules: ModuleDefinition[] = [
     description: 'Follow invoice lifecycle, overdue records, and settlement stats.',
     ready: false,
   },
+  {
+    title: 'Finance',
+    path: '/finance',
+    description: 'Track expenses, driver payroll, and profitability reports.',
+    ready: true,
+  },
 ];

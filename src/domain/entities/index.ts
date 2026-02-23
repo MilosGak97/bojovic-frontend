@@ -6,7 +6,16 @@ export type { Driver } from './driver.entity';
 export type { RoutePlan, RouteStop, RouteSimulation, CargoPlacement } from './route.entity';
 export type { DispatchAssignment } from './dispatch.entity';
 export type { Document } from './document.entity';
-export type { PaymentRecord, BrokerPaymentStats } from './payment.entity';
+export type {
+  PaymentRecord,
+  PaymentWorkflow,
+  PaymentFlowType,
+  InvoitixDecision,
+  ValutaMode,
+  ValutaCountdownStart,
+  ValutaInvoiceDispatch,
+  BrokerPaymentStats,
+} from './payment.entity';
 export type {
   Expense,
   DriverPayRecord,

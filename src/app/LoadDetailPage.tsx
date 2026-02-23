@@ -1,0 +1,2165 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router';
+import { RefreshCw } from 'lucide-react';
+import { documentApi, loadApi, paymentApi } from '../api';
+import type {
+  Document,
+  Load,
+  PaymentRecord,
+  PaymentWorkflow as PaymentWorkflowEntity,
+} from '../domain/entities';
+import type { CreatePaymentWorkflowDto } from '../domain/dto';
+import { DocumentCategory, DocumentType, LoadStatus, PaymentStatus } from '../domain/enums';
+import { ThinModuleMenu } from './components/ThinModuleMenu';
+
+type LoadDetailSection = 'overview' | 'activity' | 'payments' | 'documents' | 'stops' | 'freight' | 'contacts';
+
+type ActivityKind = 'LOAD' | 'STOP' | 'PAYMENT' | 'DOCUMENT';
+type ActivityFilter = 'ALL' | ActivityKind;
+
+type ActivityEvent = {
+  id: string;
+  date: string;
+  kind: ActivityKind;
+  title: string;
+  detail: string;
+  isUpcoming: boolean;
+};
+
+type PaymentFlowType = 'INVOITIX' | 'VALUTA';
+type ValutaMode = 'VALUTA' | 'SKONTO';
+type ValutaCountdownStart = 'ORIGINALS_RECEIVED' | 'EMAIL_COPY_INVOICE';
+type ValutaInvoiceDispatch = 'EMAIL_WITH_CMR' | 'WAIT_AND_SHIP_ORIGINALS';
+type InvoitixDecision = 'PENDING' | 'REJECTED' | 'APPROVED';
+
+type PaymentWorkflowData = {
+  flowType: PaymentFlowType | null;
+  invoitix: {
+    sentAt: string | null;
+    decision: InvoitixDecision;
+    rejectedAt: string | null;
+    resubmittedAt: string | null;
+    approvedAt: string | null;
+    paidOutAt: string | null;
+    payoutReference: string;
+    projectedIncomeAddedAt: string | null;
+    payoutConfirmedAt: string | null;
+  };
+  valuta: {
+    mode: ValutaMode;
+    countdownStart: ValutaCountdownStart | null;
+    countdownDays: string;
+    skontoPercent: string;
+    sentToAccountantAt: string | null;
+    invoiceDispatch: ValutaInvoiceDispatch | null;
+    invoiceSentAt: string | null;
+    shippedAt: string | null;
+    trackingNumber: string;
+    documentsArrivedAt: string | null;
+    payoutReceivedAt: string | null;
+    bankFeeAmount: string;
+  };
+};
+
+type PaymentNotesPayload = {
+  kind: 'LOAD_PAYMENT_WORKFLOW_V1';
+  manualNote: string;
+  workflow: PaymentWorkflowData;
+};
+
+const SECTION_ITEMS: Array<{ id: LoadDetailSection; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'activity', label: 'Activity' },
+  { id: 'payments', label: 'Payments' },
+  { id: 'documents', label: 'Documents' },
+  { id: 'stops', label: 'Stops' },
+  { id: 'freight', label: 'Freight' },
+  { id: 'contacts', label: 'Contacts' },
+];
+
+const ACTIVITY_FILTER_ITEMS: Array<{ id: ActivityFilter; label: string }> = [
+  { id: 'ALL', label: 'All' },
+  { id: 'LOAD', label: 'Load' },
+  { id: 'PAYMENT', label: 'Payment' },
+  { id: 'DOCUMENT', label: 'Document' },
+  { id: 'STOP', label: 'Stop' },
+];
+
+const DEFAULT_PAYMENT_WORKFLOW: PaymentWorkflowData = {
+  flowType: null,
+  invoitix: {
+    sentAt: null,
+    decision: 'PENDING',
+    rejectedAt: null,
+    resubmittedAt: null,
+    approvedAt: null,
+    paidOutAt: null,
+    payoutReference: '',
+    projectedIncomeAddedAt: null,
+    payoutConfirmedAt: null,
+  },
+  valuta: {
+    mode: 'VALUTA',
+    countdownStart: null,
+    countdownDays: '',
+    skontoPercent: '',
+    sentToAccountantAt: null,
+    invoiceDispatch: null,
+    invoiceSentAt: null,
+    shippedAt: null,
+    trackingNumber: '',
+    documentsArrivedAt: null,
+    payoutReceivedAt: null,
+    bankFeeAmount: '',
+  },
+};
+
+const toNumber = (value: unknown): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const moneyFormatter = new Intl.NumberFormat('de-DE', {
+  style: 'currency',
+  currency: 'EUR',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const formatMoney = (value: number): string => moneyFormatter.format(toNumber(value));
+
+const toDateOnly = (value?: string | null): string => {
+  if (!value) return '';
+  const direct = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (direct) return direct[1];
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString().slice(0, 10);
+};
+
+const formatDate = (value?: string | null): string => {
+  const dateOnly = toDateOnly(value);
+  if (!dateOnly) return '—';
+  const parsed = new Date(`${dateOnly}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return dateOnly;
+  return parsed.toLocaleDateString('en-GB');
+};
+
+const getTodayDateInput = (): string => new Date().toISOString().slice(0, 10);
+
+const normalizeNullableDate = (value?: string | null): string | null => {
+  const normalized = toDateOnly(value);
+  return normalized || null;
+};
+
+const addDaysToDateInput = (value: string, days: number): string => {
+  const normalized = toDateOnly(value);
+  if (!normalized) return '';
+  const parsed = new Date(`${normalized}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return '';
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+};
+
+const getDaysUntilDateInput = (value?: string | null): number | null => {
+  const normalized = toDateOnly(value);
+  if (!normalized) return null;
+  const target = new Date(`${normalized}T00:00:00Z`);
+  if (Number.isNaN(target.getTime())) return null;
+  const today = new Date(`${getTodayDateInput()}T00:00:00Z`);
+  const diffMs = target.getTime() - today.getTime();
+  return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+};
+
+const mergeWorkflowData = (
+  base: PaymentWorkflowData,
+  incoming?: Partial<PaymentWorkflowData> | null,
+): PaymentWorkflowData => {
+  if (!incoming) {
+    return {
+      ...base,
+      invoitix: { ...base.invoitix },
+      valuta: { ...base.valuta },
+    };
+  }
+  return {
+    ...base,
+    ...incoming,
+    invoitix: {
+      ...base.invoitix,
+      ...(incoming.invoitix ?? {}),
+    },
+    valuta: {
+      ...base.valuta,
+      ...(incoming.valuta ?? {}),
+    },
+  };
+};
+
+const mapEntityWorkflowToUi = (
+  workflow?: PaymentWorkflowEntity | null,
+): PaymentWorkflowData | null => {
+  if (!workflow) return null;
+
+  return {
+    flowType: workflow.flowType,
+    invoitix: {
+      sentAt: toDateOnly(workflow.invoitixSentAt) || null,
+      decision: workflow.invoitixDecision ?? 'PENDING',
+      rejectedAt: toDateOnly(workflow.invoitixRejectedAt) || null,
+      resubmittedAt: toDateOnly(workflow.invoitixResubmittedAt) || null,
+      approvedAt: toDateOnly(workflow.invoitixApprovedAt) || null,
+      paidOutAt: toDateOnly(workflow.invoitixPaidOutAt) || null,
+      payoutReference: workflow.invoitixPayoutReference ?? '',
+      projectedIncomeAddedAt:
+        toDateOnly(workflow.invoitixProjectedIncomeAddedAt) || null,
+      payoutConfirmedAt:
+        toDateOnly(workflow.invoitixPayoutConfirmedAt) || null,
+    },
+    valuta: {
+      mode: workflow.valutaMode ?? 'VALUTA',
+      countdownStart: workflow.valutaCountdownStart ?? null,
+      countdownDays:
+        workflow.valutaCountdownDays === null ||
+        workflow.valutaCountdownDays === undefined
+          ? ''
+          : String(workflow.valutaCountdownDays),
+      skontoPercent:
+        workflow.valutaSkontoPercent === null ||
+        workflow.valutaSkontoPercent === undefined
+          ? ''
+          : String(workflow.valutaSkontoPercent),
+      sentToAccountantAt:
+        toDateOnly(workflow.valutaSentToAccountantAt) || null,
+      invoiceDispatch: workflow.valutaInvoiceDispatch ?? null,
+      invoiceSentAt: toDateOnly(workflow.valutaInvoiceSentAt) || null,
+      shippedAt: toDateOnly(workflow.valutaShippedAt) || null,
+      trackingNumber: workflow.valutaTrackingNumber ?? '',
+      documentsArrivedAt:
+        toDateOnly(workflow.valutaDocumentsArrivedAt) || null,
+      payoutReceivedAt: toDateOnly(workflow.valutaPayoutReceivedAt) || null,
+      bankFeeAmount:
+        workflow.valutaBankFeeAmount === null ||
+        workflow.valutaBankFeeAmount === undefined
+          ? ''
+          : String(workflow.valutaBankFeeAmount),
+    },
+  };
+};
+
+const mapUiWorkflowToDto = (
+  workflow: PaymentWorkflowData,
+  manualNote: string,
+): CreatePaymentWorkflowDto => {
+  const countdownDays = Number(workflow.valuta.countdownDays);
+  const parsedCountdownDays =
+    Number.isFinite(countdownDays) && countdownDays >= 0
+      ? Math.trunc(countdownDays)
+      : undefined;
+
+  const skontoPercent = Number(workflow.valuta.skontoPercent);
+  const parsedSkontoPercent =
+    Number.isFinite(skontoPercent) && skontoPercent >= 0
+      ? Math.round(skontoPercent * 100) / 100
+      : undefined;
+
+  const bankFeeAmount = Number(workflow.valuta.bankFeeAmount);
+  const parsedBankFeeAmount =
+    Number.isFinite(bankFeeAmount) && bankFeeAmount >= 0
+      ? Math.round(bankFeeAmount * 100) / 100
+      : undefined;
+
+  const countdownStartDate =
+    workflow.valuta.countdownStart === 'ORIGINALS_RECEIVED'
+      ? workflow.valuta.documentsArrivedAt
+      : workflow.valuta.countdownStart === 'EMAIL_COPY_INVOICE'
+        ? workflow.valuta.invoiceSentAt
+        : null;
+  const projectedPayoutDate =
+    parsedCountdownDays !== undefined && countdownStartDate
+      ? addDaysToDateInput(countdownStartDate, parsedCountdownDays) || undefined
+      : undefined;
+
+  return {
+    manualNote,
+    flowType: workflow.flowType ?? undefined,
+
+    invoitixSentAt: workflow.invoitix.sentAt ?? undefined,
+    invoitixDecision: workflow.invoitix.decision,
+    invoitixRejectedAt: workflow.invoitix.rejectedAt ?? undefined,
+    invoitixResubmittedAt: workflow.invoitix.resubmittedAt ?? undefined,
+    invoitixApprovedAt: workflow.invoitix.approvedAt ?? undefined,
+    invoitixPaidOutAt: workflow.invoitix.paidOutAt ?? undefined,
+    invoitixPayoutReference:
+      workflow.invoitix.payoutReference.trim() || undefined,
+    invoitixProjectedIncomeAddedAt:
+      workflow.invoitix.projectedIncomeAddedAt ?? undefined,
+    invoitixPayoutConfirmedAt:
+      workflow.invoitix.payoutConfirmedAt ?? undefined,
+
+    valutaMode: workflow.valuta.mode,
+    valutaCountdownStart: workflow.valuta.countdownStart ?? undefined,
+    valutaCountdownDays: parsedCountdownDays,
+    valutaSkontoPercent: parsedSkontoPercent,
+    valutaSentToAccountantAt:
+      workflow.valuta.sentToAccountantAt ?? undefined,
+    valutaInvoiceDispatch: workflow.valuta.invoiceDispatch ?? undefined,
+    valutaInvoiceSentAt: workflow.valuta.invoiceSentAt ?? undefined,
+    valutaShippedAt: workflow.valuta.shippedAt ?? undefined,
+    valutaTrackingNumber: workflow.valuta.trackingNumber.trim() || undefined,
+    valutaDocumentsArrivedAt:
+      workflow.valuta.documentsArrivedAt ?? undefined,
+    valutaProjectedPayoutDate: projectedPayoutDate,
+    valutaPayoutReceivedAt: workflow.valuta.payoutReceivedAt ?? undefined,
+    valutaBankFeeAmount: parsedBankFeeAmount,
+  };
+};
+
+const parsePaymentNotesPayload = (
+  notes?: string | null,
+): { manualNote: string; workflow: PaymentWorkflowData } => {
+  if (!notes) {
+    return {
+      manualNote: '',
+      workflow: { ...DEFAULT_PAYMENT_WORKFLOW },
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(notes) as Partial<PaymentNotesPayload>;
+    if (parsed.kind === 'LOAD_PAYMENT_WORKFLOW_V1' && parsed.workflow) {
+      return {
+        manualNote: typeof parsed.manualNote === 'string' ? parsed.manualNote : '',
+        workflow: mergeWorkflowData(DEFAULT_PAYMENT_WORKFLOW, parsed.workflow),
+      };
+    }
+  } catch {
+    // Keep backward compatibility with plain text notes.
+  }
+
+  return {
+    manualNote: notes,
+    workflow: { ...DEFAULT_PAYMENT_WORKFLOW },
+  };
+};
+
+const isDetailSection = (value: string | null): value is LoadDetailSection =>
+  value !== null && SECTION_ITEMS.some((section) => section.id === value);
+
+const getLoadStatusLabel = (status: LoadStatus): string =>
+  status === LoadStatus.DELIVERED ? 'COMPLETED' : status.replaceAll('_', ' ');
+
+const getValutaModeLabel = (mode: ValutaMode): string => (mode === 'SKONTO' ? 'Skonto' : 'Valuta');
+
+const getCountdownStartLabel = (countdownStart: ValutaCountdownStart | null): string => {
+  if (countdownStart === 'ORIGINALS_RECEIVED') return 'Originals';
+  if (countdownStart === 'EMAIL_COPY_INVOICE') return 'Email';
+  return '—';
+};
+
+const getActivityKindClass = (kind: ActivityKind): string => {
+  switch (kind) {
+    case 'LOAD':
+      return 'bg-slate-100 text-slate-800';
+    case 'STOP':
+      return 'bg-blue-100 text-blue-800';
+    case 'PAYMENT':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'DOCUMENT':
+      return 'bg-amber-100 text-amber-800';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+};
+
+export default function LoadDetailPage() {
+  const { loadId = '' } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedSection = searchParams.get('section');
+
+  const [activeSection, setActiveSection] = useState<LoadDetailSection>(
+    isDetailSection(requestedSection) ? requestedSection : 'overview',
+  );
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('ALL');
+
+  const [load, setLoad] = useState<Load | null>(null);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [documents, setDocuments] = useState<Document[]>([]);
+
+  const [paymentManualNote, setPaymentManualNote] = useState('');
+  const [paymentWorkflow, setPaymentWorkflow] = useState<PaymentWorkflowData>(
+    mergeWorkflowData(DEFAULT_PAYMENT_WORKFLOW),
+  );
+  const [isFlowModalOpen, setIsFlowModalOpen] = useState(false);
+  const [flowDraft, setFlowDraft] = useState<PaymentWorkflowData>(
+    mergeWorkflowData(DEFAULT_PAYMENT_WORKFLOW),
+  );
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSavingPaymentDetails, setIsSavingPaymentDetails] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isDetailSection(requestedSection)) return;
+    setActiveSection(requestedSection);
+  }, [requestedSection]);
+
+  const setSection = (section: LoadDetailSection) => {
+    setActiveSection(section);
+    const next = new URLSearchParams(searchParams);
+    if (section === 'overview') next.delete('section');
+    else next.set('section', section);
+    setSearchParams(next, { replace: true });
+  };
+
+  const loadData = useCallback(async () => {
+    if (!loadId) return;
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const [nextLoad, nextPayments, nextDocuments] = await Promise.all([
+        loadApi.getOne(loadId),
+        paymentApi.getByLoad(loadId),
+        documentApi.getByEntity(DocumentCategory.LOAD, loadId),
+      ]);
+
+      setLoad(nextLoad);
+      setPayments(nextPayments);
+      setDocuments(nextDocuments);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to load load detail.');
+      setLoad(null);
+      setPayments([]);
+      setDocuments([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [loadId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const sortedPayments = useMemo(
+    () =>
+      [...payments].sort((a, b) => {
+        const aDate = toDateOnly(a.dueDate) || toDateOnly(a.issueDate) || toDateOnly(a.createdAt);
+        const bDate = toDateOnly(b.dueDate) || toDateOnly(b.issueDate) || toDateOnly(b.createdAt);
+        return bDate.localeCompare(aDate);
+      }),
+    [payments],
+  );
+
+  const primaryPayment = sortedPayments[0] ?? null;
+
+  const cmrDocument = useMemo(
+    () => documents.find((document) => document.documentType === DocumentType.CMR) ?? null,
+    [documents],
+  );
+
+  const orderedStops = useMemo(
+    () => [...(load?.stops ?? [])].sort((a, b) => a.orderIndex - b.orderIndex),
+    [load?.stops],
+  );
+
+  useEffect(() => {
+    if (!load) {
+      setPaymentManualNote('');
+      setPaymentWorkflow(mergeWorkflowData(DEFAULT_PAYMENT_WORKFLOW));
+      return;
+    }
+
+    const parsedNotes = parsePaymentNotesPayload(primaryPayment?.notes);
+    const entityWorkflow = mapEntityWorkflowToUi(primaryPayment?.workflow);
+    const inferredFlowType: PaymentFlowType | null = load.invoitix
+      ? 'INVOITIX'
+      : load.valutaCheck
+        ? 'VALUTA'
+        : null;
+    const sourceWorkflow = entityWorkflow ?? parsedNotes.workflow;
+    const nextWorkflow = mergeWorkflowData(sourceWorkflow, {
+      flowType: sourceWorkflow.flowType ?? inferredFlowType,
+    });
+
+    const manualNote =
+      primaryPayment?.workflow?.manualNote ??
+      parsedNotes.manualNote ??
+      '';
+    setPaymentManualNote(manualNote);
+    setPaymentWorkflow(nextWorkflow);
+  }, [load, primaryPayment]);
+
+  const activityEvents = useMemo<ActivityEvent[]>(() => {
+    const today = toDateOnly(new Date().toISOString());
+    const events: ActivityEvent[] = [];
+
+    if (load) {
+      const createdDate = toDateOnly(load.createdAt);
+      if (createdDate) {
+        events.push({
+          id: `load-created-${load.id}`,
+          date: createdDate,
+          kind: 'LOAD',
+          title: 'Load created',
+          detail: `${load.referenceNumber} was created.`,
+          isUpcoming: createdDate > today,
+        });
+      }
+
+      const updatedDate = toDateOnly(load.updatedAt);
+      if (updatedDate) {
+        events.push({
+          id: `load-updated-${load.id}`,
+          date: updatedDate,
+          kind: 'LOAD',
+          title: 'Load updated',
+          detail: `Current status: ${getLoadStatusLabel(load.status)}.`,
+          isUpcoming: updatedDate > today,
+        });
+      }
+
+      const pickupDate = toDateOnly(load.pickupDateFrom);
+      if (pickupDate) {
+        events.push({
+          id: `load-pickup-${load.id}`,
+          date: pickupDate,
+          kind: 'STOP',
+          title: 'Pickup window',
+          detail: `${load.pickupCountry}, ${load.pickupPostcode}, ${load.pickupCity}`,
+          isUpcoming: pickupDate > today,
+        });
+      }
+
+      const deliveryDate = toDateOnly(load.deliveryDateFrom);
+      if (deliveryDate) {
+        events.push({
+          id: `load-delivery-${load.id}`,
+          date: deliveryDate,
+          kind: 'STOP',
+          title: 'Delivery window',
+          detail: `${load.deliveryCountry}, ${load.deliveryPostcode}, ${load.deliveryCity}`,
+          isUpcoming: deliveryDate > today,
+        });
+      }
+    }
+
+    orderedStops.forEach((stop) => {
+      const stopDate = toDateOnly(stop.dateFrom);
+      if (!stopDate) return;
+      events.push({
+        id: `stop-${stop.id}`,
+        date: stopDate,
+        kind: 'STOP',
+        title: `${stop.stopType} stop #${stop.orderIndex + 1}`,
+        detail: `${stop.country}, ${stop.postcode}, ${stop.city}`,
+        isUpcoming: stopDate > today,
+      });
+    });
+
+    sortedPayments.forEach((payment) => {
+      const paymentCreatedDate = toDateOnly(payment.createdAt);
+      if (paymentCreatedDate) {
+        events.push({
+          id: `payment-created-${payment.id}`,
+          date: paymentCreatedDate,
+          kind: 'PAYMENT',
+          title: 'Payment record created',
+          detail: `${payment.status} • ${formatMoney(toNumber(payment.totalWithVat ?? payment.amount))}`,
+          isUpcoming: paymentCreatedDate > today,
+        });
+      }
+
+      const issueDate = toDateOnly(payment.issueDate);
+      if (issueDate) {
+        events.push({
+          id: `payment-issue-${payment.id}`,
+          date: issueDate,
+          kind: 'PAYMENT',
+          title: 'Invoice issued',
+          detail: payment.invoiceNumber ?? 'No invoice number',
+          isUpcoming: issueDate > today,
+        });
+      }
+
+      const dueDate = toDateOnly(payment.dueDate);
+      if (dueDate) {
+        events.push({
+          id: `payment-due-${payment.id}`,
+          date: dueDate,
+          kind: 'PAYMENT',
+          title: 'Payment due',
+          detail: `Status: ${payment.status}`,
+          isUpcoming: dueDate > today,
+        });
+      }
+
+      const paidDate = toDateOnly(payment.paidDate);
+      if (paidDate) {
+        events.push({
+          id: `payment-paid-${payment.id}`,
+          date: paidDate,
+          kind: 'PAYMENT',
+          title: 'Payment settled',
+          detail: formatMoney(toNumber(payment.totalWithVat ?? payment.amount)),
+          isUpcoming: paidDate > today,
+        });
+      }
+    });
+
+    documents.forEach((document) => {
+      const documentCreatedDate = toDateOnly(document.createdAt);
+      if (documentCreatedDate) {
+        events.push({
+          id: `document-created-${document.id}`,
+          date: documentCreatedDate,
+          kind: 'DOCUMENT',
+          title: 'Document uploaded',
+          detail: `${document.documentType} • ${document.title}`,
+          isUpcoming: documentCreatedDate > today,
+        });
+      }
+
+      const issuedDate = toDateOnly(document.issuedAt);
+      if (issuedDate) {
+        events.push({
+          id: `document-issued-${document.id}`,
+          date: issuedDate,
+          kind: 'DOCUMENT',
+          title: 'Document issued',
+          detail: document.title,
+          isUpcoming: issuedDate > today,
+        });
+      }
+    });
+
+    return events
+      .filter((event) => Boolean(event.date))
+      .sort((a, b) =>
+        a.date === b.date
+          ? a.title.localeCompare(b.title)
+          : b.date.localeCompare(a.date),
+      );
+  }, [documents, load, orderedStops, sortedPayments]);
+
+  const activityCounts = useMemo(() => {
+    return activityEvents.reduce(
+      (acc, event) => {
+        acc.ALL += 1;
+        acc[event.kind] += 1;
+        return acc;
+      },
+      {
+        ALL: 0,
+        LOAD: 0,
+        STOP: 0,
+        PAYMENT: 0,
+        DOCUMENT: 0,
+      },
+    );
+  }, [activityEvents]);
+
+  const filteredActivityEvents = useMemo(
+    () => activityEvents.filter((event) => activityFilter === 'ALL' || event.kind === activityFilter),
+    [activityEvents, activityFilter],
+  );
+
+  const routeLabel = useMemo(() => {
+    if (!load) return '—';
+    return `${load.pickupCountry}, ${load.pickupPostcode}, ${load.pickupCity} → ${load.deliveryCountry}, ${load.deliveryPostcode}, ${load.deliveryCity}`;
+  }, [load]);
+
+  const palletsTotal = useMemo(() => {
+    if (!load) return 0;
+    if (typeof load.freightDetails?.palletCount === 'number') {
+      return Math.max(0, Math.round(load.freightDetails.palletCount));
+    }
+    return (load.pallets ?? []).reduce(
+      (sum, pallet) => sum + Math.max(1, pallet.quantity ?? 1),
+      0,
+    );
+  }, [load]);
+
+  const expectedAmount = useMemo(() => {
+    if (!load) return 0;
+    return toNumber(primaryPayment?.totalWithVat ?? primaryPayment?.amount ?? load.agreedPrice ?? load.publishedPrice);
+  }, [load, primaryPayment]);
+
+  const baseLoadAmount = useMemo(
+    () => toNumber(load?.agreedPrice ?? load?.publishedPrice),
+    [load],
+  );
+
+  const currentPaymentStatus = primaryPayment?.status ?? PaymentStatus.PENDING;
+  const isLoadCompleted = load?.status === LoadStatus.DELIVERED;
+  const selectedFlowType = paymentWorkflow.flowType;
+  const isInvoitixFlow = selectedFlowType === 'INVOITIX';
+  const isValutaFlow = selectedFlowType === 'VALUTA';
+  const isSkontoMode = paymentWorkflow.valuta.mode === 'SKONTO';
+
+  const invoitixFeeAmount = useMemo(
+    () => (baseLoadAmount > 0 ? Math.round((baseLoadAmount * 0.07 + 3.15) * 100) / 100 : 0),
+    [baseLoadAmount],
+  );
+  const invoitixProjectedPayout = useMemo(
+    () => Math.max(0, Math.round((baseLoadAmount - invoitixFeeAmount) * 100) / 100),
+    [baseLoadAmount, invoitixFeeAmount],
+  );
+
+  const skontoFeeAmount = useMemo(() => {
+    const percent = toNumber(paymentWorkflow.valuta.skontoPercent);
+    if (!isSkontoMode || baseLoadAmount <= 0 || percent <= 0) return 0;
+    return Math.round((baseLoadAmount * percent / 100) * 100) / 100;
+  }, [baseLoadAmount, isSkontoMode, paymentWorkflow.valuta.skontoPercent]);
+
+  const bankFeeAmount = toNumber(paymentWorkflow.valuta.bankFeeAmount);
+  const projectedPayout = useMemo(() => {
+    if (baseLoadAmount <= 0) return 0;
+    if (isInvoitixFlow) return invoitixProjectedPayout;
+    if (isValutaFlow) {
+      return Math.max(
+        0,
+        Math.round((baseLoadAmount - skontoFeeAmount - bankFeeAmount) * 100) / 100,
+      );
+    }
+    return baseLoadAmount;
+  }, [bankFeeAmount, baseLoadAmount, invoitixProjectedPayout, isInvoitixFlow, isValutaFlow, skontoFeeAmount]);
+
+  const invoitixSentDate = paymentWorkflow.invoitix.sentAt;
+  const invoitixProjectedDate = invoitixSentDate ? addDaysToDateInput(invoitixSentDate, 2) : '';
+  const isInvoitixSentSaved = Boolean(invoitixSentDate);
+  const isInvoitixPayoutConfirmed = Boolean(paymentWorkflow.invoitix.payoutConfirmedAt);
+  const isValutaPayoutConfirmed = Boolean(paymentWorkflow.valuta.payoutReceivedAt);
+
+  const hasValutaCountdownDays = paymentWorkflow.valuta.countdownDays !== '';
+  const valutaCountdownDays = Math.max(0, Math.trunc(toNumber(paymentWorkflow.valuta.countdownDays)));
+  const valutaCountdownStartDate =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED'
+      ? paymentWorkflow.valuta.documentsArrivedAt
+      : paymentWorkflow.valuta.countdownStart === 'EMAIL_COPY_INVOICE'
+        ? paymentWorkflow.valuta.invoiceSentAt
+        : null;
+  const valutaProjectedDate =
+    hasValutaCountdownDays && valutaCountdownStartDate !== null && valutaCountdownStartDate !== ''
+      ? addDaysToDateInput(valutaCountdownStartDate, valutaCountdownDays)
+      : '';
+
+  const valutaCurrentStatus = useMemo(() => {
+    if (!isLoadCompleted) return 'Waiting to be completed';
+    if (!paymentWorkflow.valuta.countdownStart) return 'Waiting for flow setup';
+    if (isValutaPayoutConfirmed) return 'Payout confirmed';
+
+    if (paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED') {
+      if (!paymentWorkflow.valuta.shippedAt) return 'Waiting for driver return';
+      if (!paymentWorkflow.valuta.documentsArrivedAt) return 'Waiting for originals to arrive';
+      return 'Countdown in progress';
+    }
+
+    if (!paymentWorkflow.valuta.invoiceSentAt) return 'Waiting for driver return';
+    return 'Countdown in progress';
+  }, [
+    isLoadCompleted,
+    isValutaPayoutConfirmed,
+    paymentWorkflow.valuta.countdownStart,
+    paymentWorkflow.valuta.documentsArrivedAt,
+    paymentWorkflow.valuta.invoiceSentAt,
+    paymentWorkflow.valuta.shippedAt,
+  ]);
+
+  const isValutaEmailStepDone = Boolean(paymentWorkflow.valuta.invoiceSentAt);
+  const isValutaOriginalsSentStepDone = Boolean(
+    paymentWorkflow.valuta.shippedAt && paymentWorkflow.valuta.trackingNumber.trim(),
+  );
+  const hasValutaSentDocumentsDraft = Boolean(
+    paymentWorkflow.valuta.shippedAt || paymentWorkflow.valuta.trackingNumber.trim(),
+  );
+  const isValutaWaitingDriverInProgress =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' &&
+    isLoadCompleted &&
+    !isValutaOriginalsSentStepDone;
+  const isValutaWaitingDriverPending =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' &&
+    !isLoadCompleted &&
+    !isValutaOriginalsSentStepDone;
+  const isValutaSentDocumentsInProgress =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' &&
+    isLoadCompleted &&
+    !isValutaOriginalsSentStepDone &&
+    hasValutaSentDocumentsDraft;
+  const isValutaSentDocumentsPending =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' &&
+    !isValutaOriginalsSentStepDone &&
+    !isValutaSentDocumentsInProgress;
+  const isValutaOriginalsArrivedStepDone = Boolean(paymentWorkflow.valuta.documentsArrivedAt);
+  const isValutaWaitingOriginalsInProgress =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' &&
+    isValutaOriginalsSentStepDone &&
+    !isValutaOriginalsArrivedStepDone;
+  const isValutaWaitingOriginalsPending =
+    paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' &&
+    !isValutaOriginalsArrivedStepDone &&
+    !isValutaWaitingOriginalsInProgress;
+  const isValutaCountdownStepDone = isValutaPayoutConfirmed;
+  const isValutaCountdownInProgress = Boolean(valutaProjectedDate) && !isValutaPayoutConfirmed;
+  const valutaDaysLeft = useMemo(
+    () => getDaysUntilDateInput(valutaProjectedDate),
+    [valutaProjectedDate],
+  );
+
+  const patchInvoitixWorkflow = (patch: Partial<PaymentWorkflowData['invoitix']>) => {
+    setPaymentWorkflow((prev) =>
+      mergeWorkflowData(prev, {
+        invoitix: patch,
+      }),
+    );
+  };
+
+  const patchValutaWorkflow = (patch: Partial<PaymentWorkflowData['valuta']>) => {
+    setPaymentWorkflow((prev) =>
+      mergeWorkflowData(prev, {
+        valuta: patch,
+      }),
+    );
+  };
+
+  const openFlowModal = () => {
+    setFlowDraft(mergeWorkflowData(DEFAULT_PAYMENT_WORKFLOW, paymentWorkflow));
+    setIsFlowModalOpen(true);
+  };
+
+  const patchFlowDraft = (patch: Partial<PaymentWorkflowData>) => {
+    setFlowDraft((prev) => mergeWorkflowData(prev, patch));
+  };
+
+  const patchValutaDraft = (patch: Partial<PaymentWorkflowData['valuta']>) => {
+    setFlowDraft((prev) =>
+      mergeWorkflowData(prev, {
+        valuta: patch,
+      }),
+    );
+  };
+
+  const savePaymentDetails = async (
+    options?: {
+      workflow?: PaymentWorkflowData;
+      amount?: number;
+      status?: PaymentStatus;
+      issueDate?: string | null;
+      dueDate?: string | null;
+      markPaidDate?: string | null;
+      skipFlowCheck?: boolean;
+    },
+  ) => {
+    if (!load) return;
+
+    setIsSavingPaymentDetails(true);
+    setError(null);
+
+    try {
+      const workflowToSave = options?.workflow ?? paymentWorkflow;
+
+      if (!workflowToSave.flowType && !options?.skipFlowCheck) {
+        throw new Error('Select payment flow first (Invoitix or Valuta/Skonto).');
+      }
+
+      const amount = toNumber(options?.amount ?? load.agreedPrice ?? load.publishedPrice);
+      if (amount <= 0) {
+        throw new Error('Payment amount must be greater than 0.');
+      }
+
+      const issueDate = options?.issueDate ?? toDateOnly(primaryPayment?.issueDate) ?? toDateOnly(load.deliveryDateFrom);
+      const dueDate =
+        options?.dueDate ??
+        toDateOnly(primaryPayment?.dueDate) ??
+        toDateOnly(load.deliveryDateTo) ??
+        toDateOnly(load.deliveryDateFrom);
+      const targetStatus = options?.status ?? primaryPayment?.status ?? PaymentStatus.PENDING;
+      const manualNote = paymentManualNote.trim();
+      const workflowDto = mapUiWorkflowToDto(workflowToSave, manualNote);
+
+      let paymentId: string;
+      if (primaryPayment) {
+        await paymentApi.update(primaryPayment.id, {
+          amount,
+          status: targetStatus,
+          ...(issueDate ? { issueDate } : {}),
+          ...(dueDate ? { dueDate } : {}),
+          ...(manualNote ? { notes: manualNote } : { notes: '' }),
+          workflow: workflowDto,
+        });
+        paymentId = primaryPayment.id;
+      } else {
+        if (!load.brokerId) {
+          throw new Error('Load has no broker assigned. Assign broker first.');
+        }
+
+        const created = await paymentApi.create({
+          loadId: load.id,
+          brokerId: load.brokerId,
+          status: targetStatus,
+          amount,
+          currency: load.currency,
+          ...(issueDate ? { issueDate } : {}),
+          ...(dueDate ? { dueDate } : {}),
+          ...(manualNote ? { notes: manualNote } : { notes: '' }),
+          workflow: workflowDto,
+        });
+        paymentId = created.id;
+      }
+
+      if (options?.markPaidDate && paymentId) {
+        await paymentApi.markPaid(paymentId, options.markPaidDate);
+      }
+
+      const shouldUseInvoitix = workflowToSave.flowType === 'INVOITIX';
+      const shouldUseValuta = workflowToSave.flowType === 'VALUTA';
+      if (load.invoitix !== shouldUseInvoitix || load.valutaCheck !== shouldUseValuta) {
+        const updatedLoad = await loadApi.update(load.id, {
+          invoitix: shouldUseInvoitix,
+          valutaCheck: shouldUseValuta,
+        });
+        setLoad(updatedLoad);
+      }
+
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to save payment details.');
+    } finally {
+      setIsSavingPaymentDetails(false);
+    }
+  };
+
+  const saveFlowSelection = async () => {
+    if (!flowDraft.flowType) {
+      setError('Select payment flow first.');
+      return;
+    }
+
+    const nextWorkflow = mergeWorkflowData(paymentWorkflow, {
+      flowType: flowDraft.flowType,
+      valuta: flowDraft.valuta,
+    });
+
+    setPaymentWorkflow(nextWorkflow);
+    await savePaymentDetails({
+      workflow: nextWorkflow,
+      amount: baseLoadAmount > 0 ? baseLoadAmount : expectedAmount,
+      status: currentPaymentStatus,
+    });
+    setIsFlowModalOpen(false);
+  };
+
+  const saveValutaStep = async (
+    patch: Partial<PaymentWorkflowData['valuta']>,
+    options?: {
+      amount?: number;
+      status?: PaymentStatus;
+      issueDate?: string | null;
+      dueDate?: string | null;
+      markPaidDate?: string | null;
+    },
+  ) => {
+    const nextWorkflow = mergeWorkflowData(paymentWorkflow, {
+      flowType: 'VALUTA',
+      valuta: patch,
+    });
+    setPaymentWorkflow(nextWorkflow);
+
+    await savePaymentDetails({
+      workflow: nextWorkflow,
+      amount: options?.amount ?? (baseLoadAmount > 0 ? baseLoadAmount : expectedAmount),
+      status: options?.status ?? currentPaymentStatus,
+      issueDate: options?.issueDate,
+      dueDate: options?.dueDate,
+      markPaidDate: options?.markPaidDate,
+    });
+  };
+
+  const confirmValutaEmailSent = async () => {
+    if (!isLoadCompleted) {
+      setError('Load must be completed first.');
+      return;
+    }
+
+    const sentDate = paymentWorkflow.valuta.invoiceSentAt ?? getTodayDateInput();
+    const confirmed = window.confirm(`Confirm email copy + invoice sent on ${formatDate(sentDate)}?`);
+    if (!confirmed) return;
+
+    const dueDate = addDaysToDateInput(sentDate, valutaCountdownDays);
+    await saveValutaStep(
+      {
+        invoiceSentAt: sentDate,
+        invoiceDispatch: 'EMAIL_WITH_CMR',
+      },
+      {
+        issueDate: sentDate,
+        dueDate: dueDate || undefined,
+      },
+    );
+  };
+
+  const confirmValutaOriginalsSent = async () => {
+    if (!isLoadCompleted) {
+      setError('Load must be completed first.');
+      return;
+    }
+
+    const sentDate = paymentWorkflow.valuta.shippedAt ?? getTodayDateInput();
+    const trackingNumber = paymentWorkflow.valuta.trackingNumber.trim();
+    if (!trackingNumber) {
+      setError('Enter tracking number before marking originals as sent.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Confirm originals sent to broker on ${formatDate(sentDate)}?`);
+    if (!confirmed) return;
+
+    await saveValutaStep(
+      {
+        shippedAt: sentDate,
+        trackingNumber,
+        invoiceDispatch: 'WAIT_AND_SHIP_ORIGINALS',
+      },
+      {
+        issueDate: sentDate,
+      },
+    );
+  };
+
+  const confirmValutaOriginalsArrived = async () => {
+    if (!paymentWorkflow.valuta.shippedAt) {
+      setError('Mark originals as sent first.');
+      return;
+    }
+
+    const arrivedDate = paymentWorkflow.valuta.documentsArrivedAt ?? getTodayDateInput();
+    const confirmed = window.confirm(`Confirm originals arrived on ${formatDate(arrivedDate)}?`);
+    if (!confirmed) return;
+
+    const dueDate = addDaysToDateInput(arrivedDate, valutaCountdownDays);
+    await saveValutaStep(
+      {
+        documentsArrivedAt: arrivedDate,
+      },
+      {
+        dueDate: dueDate || undefined,
+      },
+    );
+  };
+
+  const confirmValutaPayout = async () => {
+    if (!isLoadCompleted) {
+      setError('Load must be completed first.');
+      return;
+    }
+    if (!valutaCountdownStartDate) {
+      setError('Countdown has not started yet.');
+      return;
+    }
+
+    const payoutDate = getTodayDateInput();
+    const confirmed = window.confirm(`Confirm payout received on ${formatDate(payoutDate)}?`);
+    if (!confirmed) return;
+
+    await saveValutaStep(
+      {
+        payoutReceivedAt: payoutDate,
+      },
+      {
+        amount: projectedPayout,
+        status: PaymentStatus.PAID,
+        dueDate: valutaProjectedDate || payoutDate,
+        markPaidDate: payoutDate,
+      },
+    );
+  };
+
+  const saveValutaBankFee = async () => {
+    if (!isValutaPayoutConfirmed) {
+      setError('Confirm payout first, then save bank fee.');
+      return;
+    }
+
+    await saveValutaStep(
+      {
+        bankFeeAmount: paymentWorkflow.valuta.bankFeeAmount,
+      },
+      {
+        amount: projectedPayout,
+        status: PaymentStatus.PAID,
+        dueDate: valutaProjectedDate || toDateOnly(primaryPayment?.dueDate),
+      },
+    );
+  };
+
+  const confirmSendToInvoitix = async () => {
+    const sendDate = paymentWorkflow.invoitix.sentAt ?? getTodayDateInput();
+    const projectedDate = addDaysToDateInput(sendDate, 2);
+    const confirmed = window.confirm(
+      `Are you sure you want to mark this load as sent to Invoitix on ${formatDate(sendDate)}?\n\nProjected payout: ${formatMoney(invoitixProjectedPayout)}\nProjected date: ${formatDate(projectedDate)}`,
+    );
+    if (!confirmed) return;
+
+    const nextWorkflow = mergeWorkflowData(paymentWorkflow, {
+      flowType: 'INVOITIX',
+      invoitix: {
+        sentAt: sendDate,
+        projectedIncomeAddedAt: sendDate,
+      },
+    });
+
+    await savePaymentDetails({
+      workflow: nextWorkflow,
+      amount: baseLoadAmount,
+      status: PaymentStatus.INVOICED,
+      issueDate: sendDate,
+      dueDate: projectedDate,
+    });
+  };
+
+  const confirmInvoitixPayout = async () => {
+    if (!invoitixSentDate) {
+      setError('Send to Invoitix first.');
+      return;
+    }
+
+    const confirmed = window.confirm('Confirm Invoitix payout received?');
+    if (!confirmed) return;
+
+    const payoutDate = getTodayDateInput();
+    const nextWorkflow = mergeWorkflowData(paymentWorkflow, {
+      flowType: 'INVOITIX',
+      invoitix: {
+        payoutConfirmedAt: payoutDate,
+        paidOutAt: payoutDate,
+      },
+    });
+
+    await savePaymentDetails({
+      workflow: nextWorkflow,
+      amount: invoitixProjectedPayout,
+      status: PaymentStatus.PAID,
+      issueDate: invoitixSentDate,
+      dueDate: invoitixProjectedDate || addDaysToDateInput(invoitixSentDate, 2),
+      markPaidDate: payoutDate,
+    });
+  };
+
+  if (!loadId) {
+    return (
+      <main className="min-h-screen bg-slate-100">
+        <ThinModuleMenu />
+        <div className="w-full px-4 py-8 sm:px-6 xl:px-8">
+          <section className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            Invalid load id.
+          </section>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-100">
+      <ThinModuleMenu />
+
+      <div className="w-full px-4 py-6 sm:px-6 xl:px-8">
+        <header className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Load Detail</p>
+              <h1 className="mt-1 text-2xl font-semibold text-slate-900">
+                {load?.referenceNumber ?? 'Loading...'}
+              </h1>
+              <p className="mt-1 text-sm text-slate-600">{routeLabel}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                to="/load-board"
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Back To Load Board
+              </Link>
+              <button
+                type="button"
+                onClick={() => void loadData()}
+                disabled={isLoading}
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Brokerage</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {load?.broker?.companyName ?? load?.brokerageName ?? 'Broker not set'}
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Contact: {load?.contactPerson || '—'} {load?.contactPhone ? `• ${load.contactPhone}` : ''}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Load</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {palletsTotal} pallets • {toNumber(load?.freightDetails?.weightTons).toFixed(2)} t
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Board: {load?.boardSource ?? '—'} • TransEU: {load?.transEuFreightNumber ?? '—'}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Payment Snapshot</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {expectedAmount > 0 ? formatMoney(expectedAmount) : '—'}
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Status: {primaryPayment?.status ?? PaymentStatus.PENDING}
+              </p>
+            </div>
+          </div>
+
+          {error && (
+            <p className="mt-3 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+              {error}
+            </p>
+          )}
+        </header>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
+          <aside className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Load Menu</p>
+            <nav className="space-y-1">
+              {SECTION_ITEMS.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  onClick={() => setSection(section.id)}
+                  className={`w-full rounded px-2 py-2 text-left text-sm font-medium transition-colors ${
+                    activeSection === section.id
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </nav>
+          </aside>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            {activeSection === 'overview' && (
+              <div className="grid gap-4 md:grid-cols-2">
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Brokerage Information</h2>
+                  <p className="mt-2 text-sm text-slate-800">
+                    {load?.broker?.companyName ?? load?.brokerageName ?? 'Broker not set'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">Email: {load?.contactEmail ?? '—'}</p>
+                  <p className="mt-1 text-xs text-slate-600">Phone: {load?.contactPhone ?? '—'}</p>
+                </article>
+
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Load Information</h2>
+                  <p className="mt-2 text-xs text-slate-600">Pickup: {load ? formatDate(load.pickupDateFrom) : '—'}</p>
+                  <p className="mt-1 text-xs text-slate-600">Delivery: {load ? formatDate(load.deliveryDateFrom) : '—'}</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Price: {toNumber(load?.agreedPrice ?? load?.publishedPrice) > 0
+                      ? formatMoney(toNumber(load?.agreedPrice ?? load?.publishedPrice))
+                      : '—'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">Notes: {load?.notes ?? '—'}</p>
+                </article>
+              </div>
+            )}
+
+            {activeSection === 'activity' && (
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold text-slate-900">Activity Timeline</h2>
+                  <span className="text-xs text-slate-500">
+                    {filteredActivityEvents.length} / {activityEvents.length} events
+                  </span>
+                </div>
+
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {ACTIVITY_FILTER_ITEMS.map((filterItem) => (
+                    <button
+                      key={filterItem.id}
+                      type="button"
+                      onClick={() => setActivityFilter(filterItem.id)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                        activityFilter === filterItem.id
+                          ? 'bg-slate-900 text-white'
+                          : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {filterItem.label} ({activityCounts[filterItem.id]})
+                    </button>
+                  ))}
+                </div>
+
+                {filteredActivityEvents.length === 0 && (
+                  <p className="text-sm text-slate-500">
+                    {activityEvents.length === 0
+                      ? 'No activity events available for this load yet.'
+                      : 'No activity events for selected filter.'}
+                  </p>
+                )}
+
+                {filteredActivityEvents.length > 0 && (
+                  <ol className="space-y-2">
+                    {filteredActivityEvents.map((event) => (
+                      <li key={event.id} className="rounded border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getActivityKindClass(event.kind)}`}>
+                              {event.kind}
+                            </span>
+                            <p className="text-sm font-semibold text-slate-900">{event.title}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {event.isUpcoming && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                                UPCOMING
+                              </span>
+                            )}
+                            <span className="text-xs text-slate-500">{formatDate(event.date)}</span>
+                          </div>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-600">{event.detail}</p>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+
+            {activeSection === 'payments' && (
+              <div className="space-y-5">
+                <article className="rounded-xl border-2 border-slate-300 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 1</p>
+                  <h2 className="mt-1 text-base font-semibold text-slate-900">Base Amount & Flow</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Base amount is locked from load price. Set payment flow in advance, then manage dates below.
+                  </p>
+
+                  <div className="mt-3 grid gap-3 md:grid-cols-3">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs text-slate-500">Base Amount</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-900">
+                        {baseLoadAmount > 0 ? formatMoney(baseLoadAmount) : '—'}
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs text-slate-500">Load Status</p>
+                      <div className="mt-2">
+                        <span
+                          className={`inline-flex rounded px-2 py-1.5 text-xs font-semibold ${
+                            isLoadCompleted
+                              ? 'border border-emerald-300 bg-emerald-100 text-emerald-800'
+                              : 'border border-slate-300 bg-white text-slate-900'
+                          }`}
+                        >
+                          {load?.status ? getLoadStatusLabel(load.status) : '—'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs text-slate-500">Payment Flow</p>
+                      {!selectedFlowType && (
+                        <div className="mt-2 space-y-2">
+                          <p className="text-xs text-slate-600">No flow selected yet.</p>
+                          <button
+                            type="button"
+                            onClick={openFlowModal}
+                            className="w-full rounded border border-slate-900 bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                          >
+                            Set Flow
+                          </button>
+                        </div>
+                      )}
+                      {selectedFlowType && (
+                        <div className="mt-2 space-y-2">
+                          <div className="rounded border border-slate-300 bg-white p-2">
+                            <div className="flex flex-wrap gap-1.5">
+                              <span
+                                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                  isInvoitixFlow
+                                    ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                    : 'border-amber-300 bg-amber-50 text-amber-700'
+                                }`}
+                              >
+                                {isInvoitixFlow ? 'Invoitix' : getValutaModeLabel(paymentWorkflow.valuta.mode)}
+                              </span>
+                              {isInvoitixFlow && (
+                                <>
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+                                    Sent: {formatDate(paymentWorkflow.invoitix.sentAt)}
+                                  </span>
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+                                    Projected: {formatDate(invoitixProjectedDate)}
+                                  </span>
+                                </>
+                              )}
+                              {isValutaFlow && (
+                                <>
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+                                    {getCountdownStartLabel(paymentWorkflow.valuta.countdownStart)}
+                                  </span>
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+                                    {paymentWorkflow.valuta.countdownDays || '—'} day(s)
+                                  </span>
+                                  {paymentWorkflow.valuta.mode === 'SKONTO' && paymentWorkflow.valuta.skontoPercent && (
+                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700">
+                                      {paymentWorkflow.valuta.skontoPercent}%
+                                    </span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={openFlowModal}
+                            className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                          >
+                            Edit Flow
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {!selectedFlowType && (
+                    <article className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      Set flow to continue with payment dates and confirmation steps.
+                    </article>
+                  )}
+
+                  {isInvoitixFlow && (
+                    <section className="mt-4 rounded-xl border-2 border-blue-300 bg-blue-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Invoitix Flow</p>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      <div className="rounded-lg border border-blue-200 bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-900">1) Send To Invoitix</p>
+                        {!isInvoitixSentSaved && (
+                          <>
+                            <label className="mt-2 block text-xs text-slate-600">
+                              Send Date
+                              <input
+                                type="date"
+                                value={paymentWorkflow.invoitix.sentAt ?? ''}
+                                onChange={(event) =>
+                                  patchInvoitixWorkflow({ sentAt: normalizeNullableDate(event.target.value) })
+                                }
+                                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => patchInvoitixWorkflow({ sentAt: getTodayDateInput() })}
+                              className="mt-2 w-full rounded border border-blue-300 bg-blue-100 px-2 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-200"
+                            >
+                              Mark Today
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void confirmSendToInvoitix()}
+                              disabled={isSavingPaymentDetails}
+                              className="mt-2 w-full rounded border border-blue-600 bg-blue-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                            >
+                              Confirm & Save Send
+                            </button>
+                          </>
+                        )}
+                        {isInvoitixSentSaved && (
+                          <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+                            Sent to Invoitix: <span className="font-semibold">{formatDate(invoitixSentDate)}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-lg border border-blue-200 bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-900">2) Projected Payout (48h)</p>
+                        <p className="mt-2 text-xs text-slate-600">
+                          Fee: {formatMoney(invoitixFeeAmount)} (7% + 3.15 EUR)
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">
+                          Payout: {formatMoney(invoitixProjectedPayout)}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-600">
+                          Expected date: {invoitixProjectedDate ? formatDate(invoitixProjectedDate) : '—'}
+                        </p>
+                        <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                          Projected payout is view-only and is tracked automatically after send confirmation.
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-blue-200 bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-900">3) Confirm Payout</p>
+                        {!isInvoitixPayoutConfirmed && (
+                          <button
+                            type="button"
+                            onClick={() => void confirmInvoitixPayout()}
+                            disabled={!isInvoitixSentSaved || isSavingPaymentDetails}
+                            className="mt-2 w-full rounded border border-emerald-500 bg-emerald-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Confirm Payout
+                          </button>
+                        )}
+                        {isInvoitixPayoutConfirmed && (
+                          <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+                            Payout confirmed on <span className="font-semibold">{formatDate(paymentWorkflow.invoitix.payoutConfirmedAt)}</span>
+                          </div>
+                        )}
+                        <p className="mt-2 text-xs text-slate-600">
+                          Payment status: <span className="font-semibold">{currentPaymentStatus.replaceAll('_', ' ')}</span>
+                        </p>
+                      </div>
+                    </div>
+                    </section>
+                  )}
+
+                  {isValutaFlow && (
+                    <section className="mt-4 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Valuta / Skonto Flow</p>
+                      </div>
+
+                      <div className="mt-3 rounded-lg border border-amber-200 bg-white p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">Current Status</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">{valutaCurrentStatus}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                              {getValutaModeLabel(paymentWorkflow.valuta.mode)}
+                            </span>
+                            {isSkontoMode && paymentWorkflow.valuta.skontoPercent && (
+                              <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                {paymentWorkflow.valuta.skontoPercent}%
+                              </span>
+                            )}
+                            <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                              {getCountdownStartLabel(paymentWorkflow.valuta.countdownStart)}
+                            </span>
+                            <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                              {paymentWorkflow.valuta.countdownDays || '—'} day(s)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)]">
+                        <div className="space-y-3">
+                          {paymentWorkflow.valuta.countdownStart === 'EMAIL_COPY_INVOICE' && (
+                            <div
+                              className={`rounded-lg border p-3 ${
+                                isValutaEmailStepDone ? 'border-emerald-300 bg-emerald-50' : 'border-amber-200 bg-white'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm font-semibold text-slate-900">1) Send Email Copy + Invoice</p>
+                                {isValutaEmailStepDone && (
+                                  <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                    ✓ Done
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-[11px] text-slate-600">
+                                Complete when email copy + invoice is confirmed as sent.
+                              </p>
+                              <label className="mt-2 block text-xs text-slate-600">
+                                Sent Date
+                                <input
+                                  type="date"
+                                  value={paymentWorkflow.valuta.invoiceSentAt ?? ''}
+                                  onChange={(event) =>
+                                    patchValutaWorkflow({ invoiceSentAt: normalizeNullableDate(event.target.value) })
+                                  }
+                                  disabled={isValutaEmailStepDone}
+                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
+                                />
+                              </label>
+                              {!isValutaEmailStepDone && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => patchValutaWorkflow({ invoiceSentAt: getTodayDateInput() })}
+                                    className="mt-2 w-full rounded border border-amber-300 bg-amber-100 px-2 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-200"
+                                  >
+                                    Mark Today
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void confirmValutaEmailSent()}
+                                    disabled={!isLoadCompleted || isSavingPaymentDetails}
+                                    className="mt-2 w-full rounded border border-amber-600 bg-amber-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                                  >
+                                    Confirm Email Sent
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+
+                          {paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' && (
+                            <div
+                              className={`rounded-lg border p-3 ${
+                                isValutaOriginalsSentStepDone
+                                  ? 'border-emerald-300 bg-emerald-50'
+                                  : isValutaWaitingDriverInProgress
+                                    ? 'border-blue-300 bg-blue-50'
+                                  : 'border-amber-200 bg-white'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm font-semibold text-slate-900">1) Waiting On Driver</p>
+                                {isValutaOriginalsSentStepDone && (
+                                  <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                    ✓ Done
+                                  </span>
+                                )}
+                                {!isValutaOriginalsSentStepDone && isValutaWaitingDriverInProgress && (
+                                  <span className="rounded-full border border-blue-300 bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                    IN PROGRESS
+                                  </span>
+                                )}
+                                {!isValutaOriginalsSentStepDone && isValutaWaitingDriverPending && (
+                                  <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                    PENDING
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-[11px] text-slate-600">
+                                {isValutaOriginalsSentStepDone
+                                  ? 'Driver returned.'
+                                  : isValutaWaitingDriverInProgress
+                                    ? 'Waiting for driver to return from trip.'
+                                    : 'Pending until load is completed.'}
+                              </p>
+                            </div>
+                          )}
+
+                          {paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' && (
+                            <div
+                              className={`rounded-lg border p-3 ${
+                                isValutaOriginalsSentStepDone
+                                  ? 'border-emerald-300 bg-emerald-50'
+                                  : isValutaSentDocumentsInProgress
+                                    ? 'border-blue-300 bg-blue-50'
+                                    : 'border-amber-200 bg-white'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm font-semibold text-slate-900">2) Sent Documents</p>
+                                {isValutaOriginalsSentStepDone && (
+                                  <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                    ✓ Done
+                                  </span>
+                                )}
+                                {!isValutaOriginalsSentStepDone && isValutaSentDocumentsInProgress && (
+                                  <span className="rounded-full border border-blue-300 bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                    IN PROGRESS
+                                  </span>
+                                )}
+                                {!isValutaOriginalsSentStepDone && isValutaSentDocumentsPending && (
+                                  <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                    PENDING
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-[11px] text-slate-600">
+                                Complete when originals are sent to broker with date and tracking number.
+                              </p>
+                              <label className="mt-2 block text-xs text-slate-600">
+                                Sent Date
+                                <input
+                                  type="date"
+                                  value={paymentWorkflow.valuta.shippedAt ?? ''}
+                                  onChange={(event) =>
+                                    patchValutaWorkflow({ shippedAt: normalizeNullableDate(event.target.value) })
+                                  }
+                                  disabled={isValutaOriginalsSentStepDone}
+                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
+                                />
+                              </label>
+                              <label className="mt-2 block text-xs text-slate-600">
+                                Tracking Number
+                                <input
+                                  type="text"
+                                  value={paymentWorkflow.valuta.trackingNumber}
+                                  onChange={(event) => patchValutaWorkflow({ trackingNumber: event.target.value })}
+                                  placeholder="e.g. RR384756221DE"
+                                  disabled={isValutaOriginalsSentStepDone}
+                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
+                                />
+                              </label>
+                              {!isValutaOriginalsSentStepDone && (
+                                <button
+                                  type="button"
+                                  onClick={() => void confirmValutaOriginalsSent()}
+                                  disabled={!isLoadCompleted || !paymentWorkflow.valuta.trackingNumber.trim() || isSavingPaymentDetails}
+                                  className="mt-2 w-full rounded border border-amber-600 bg-amber-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                                >
+                                  Confirm Sent Documents
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED' && (
+                            <div
+                              className={`rounded-lg border p-3 ${
+                                isValutaOriginalsArrivedStepDone
+                                  ? 'border-emerald-300 bg-emerald-50'
+                                  : isValutaWaitingOriginalsInProgress
+                                    ? 'border-blue-300 bg-blue-50'
+                                  : 'border-amber-200 bg-white'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm font-semibold text-slate-900">3) Waiting For Originals</p>
+                                {isValutaOriginalsArrivedStepDone && (
+                                  <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                    ✓ Done
+                                  </span>
+                                )}
+                                {!isValutaOriginalsArrivedStepDone && isValutaWaitingOriginalsInProgress && (
+                                  <span className="rounded-full border border-blue-300 bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                    IN PROGRESS
+                                  </span>
+                                )}
+                                {!isValutaOriginalsArrivedStepDone && isValutaWaitingOriginalsPending && (
+                                  <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                    PENDING
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-[11px] text-slate-600">
+                                {isValutaWaitingOriginalsInProgress
+                                  ? 'Originals are on the way. Confirm once broker receives them.'
+                                  : 'Pending until originals are sent with tracking number.'}
+                              </p>
+                              <label className="mt-2 block text-xs text-slate-600">
+                                Arrival Date
+                                <input
+                                  type="date"
+                                  value={paymentWorkflow.valuta.documentsArrivedAt ?? ''}
+                                  onChange={(event) =>
+                                    patchValutaWorkflow({ documentsArrivedAt: normalizeNullableDate(event.target.value) })
+                                  }
+                                  disabled={isValutaOriginalsArrivedStepDone}
+                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
+                                />
+                              </label>
+                              {!isValutaOriginalsArrivedStepDone && (
+                                <button
+                                  type="button"
+                                  onClick={() => void confirmValutaOriginalsArrived()}
+                                  disabled={!paymentWorkflow.valuta.shippedAt || isSavingPaymentDetails}
+                                  className="mt-2 w-full rounded border border-amber-600 bg-amber-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                                >
+                                  Confirm Originals Arrived
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                        </div>
+
+                        <div className="space-y-3">
+                          <div
+                            className={`rounded-lg border p-3 ${
+                              isValutaCountdownStepDone
+                                ? 'border-emerald-300 bg-emerald-50'
+                                : isValutaCountdownInProgress
+                                  ? 'border-blue-300 bg-blue-50'
+                                  : 'border-amber-200 bg-white'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-semibold text-slate-900">
+                                {paymentWorkflow.valuta.countdownStart === 'ORIGINALS_RECEIVED'
+                                  ? '4) Countdown & Payout'
+                                  : '2) Countdown & Payout'}
+                              </p>
+                              {isValutaCountdownStepDone && (
+                                <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                  ✓ Done
+                                </span>
+                              )}
+                              {!isValutaCountdownStepDone && isValutaCountdownInProgress && (
+                                <span className="rounded-full border border-blue-300 bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                  IN PROGRESS
+                                </span>
+                              )}
+                              {!isValutaCountdownStepDone && !isValutaCountdownInProgress && (
+                                <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                  PENDING
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-[11px] text-slate-600">
+                              {isValutaCountdownStepDone
+                                ? 'Countdown is complete and payout is confirmed.'
+                                : isValutaCountdownInProgress
+                                  ? 'Projected payout date is set. Keep this step in progress until payout is confirmed.'
+                                  : 'Set countdown start date and days to generate projected payout date.'}
+                            </p>
+                            <p className="mt-2 text-xs text-slate-600">
+                              Start rule: <span className="font-semibold">{getCountdownStartLabel(paymentWorkflow.valuta.countdownStart)}</span>
+                            </p>
+                            <p className="mt-1 text-xs text-slate-600">
+                              Start date: <span className="font-semibold">{formatDate(valutaCountdownStartDate)}</span>
+                            </p>
+                            <p className="mt-1 text-xs text-slate-600">
+                              Countdown: <span className="font-semibold">{paymentWorkflow.valuta.countdownDays || '—'} day(s)</span>
+                            </p>
+                            <p className="mt-1 text-xs text-slate-600">
+                              Projected payout date: <span className="font-semibold">{formatDate(valutaProjectedDate)}</span>
+                            </p>
+                            <p className="mt-1 text-xs text-slate-600">
+                              Days left:{' '}
+                              <span className="font-semibold">
+                                {valutaDaysLeft === null
+                                  ? '—'
+                                  : valutaDaysLeft >= 0
+                                    ? `${valutaDaysLeft} day(s)`
+                                    : `Overdue ${Math.abs(valutaDaysLeft)} day(s)`}
+                              </span>
+                            </p>
+                            {!isValutaPayoutConfirmed && (
+                              <button
+                                type="button"
+                                onClick={() => void confirmValutaPayout()}
+                                disabled={!isLoadCompleted || !valutaProjectedDate || isSavingPaymentDetails}
+                                className="mt-2 w-full rounded border border-emerald-500 bg-emerald-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"
+                              >
+                                Confirm Payout
+                              </button>
+                            )}
+                            {isValutaPayoutConfirmed && (
+                              <p className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-800">
+                                Payout confirmed on{' '}
+                                <span className="font-semibold">{formatDate(paymentWorkflow.valuta.payoutReceivedAt)}</span>
+                              </p>
+                            )}
+
+                            <label className="mt-2 block text-xs text-slate-600">
+                              Bank Flat Fee
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={paymentWorkflow.valuta.bankFeeAmount}
+                                onChange={(event) => patchValutaWorkflow({ bankFeeAmount: event.target.value })}
+                                disabled={!isValutaPayoutConfirmed}
+                                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => void saveValutaBankFee()}
+                              disabled={!isValutaPayoutConfirmed || isSavingPaymentDetails}
+                              className="mt-2 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                            >
+                              Save Bank Fee
+                            </button>
+                            <p className="mt-2 text-xs text-slate-600">
+                              Projected payout: <span className="font-semibold">{formatMoney(projectedPayout)}</span>
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+                </article>
+              </div>
+            )}
+
+            {activeSection === 'documents' && (
+              <div>
+                <h2 className="mb-3 text-sm font-semibold text-slate-900">Documents</h2>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="px-2 py-1">Type</th>
+                        <th className="px-2 py-1">Title</th>
+                        <th className="px-2 py-1">Issued</th>
+                        <th className="px-2 py-1">Valid Until</th>
+                        <th className="px-2 py-1">File</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {documents.length === 0 && (
+                        <tr>
+                          <td className="px-2 py-3 text-slate-500" colSpan={5}>
+                            No documents attached to this load yet.
+                          </td>
+                        </tr>
+                      )}
+                      {documents.map((document) => (
+                        <tr key={document.id} className="border-t border-slate-100">
+                          <td className="px-2 py-1.5 text-slate-700">{document.documentType}</td>
+                          <td className="px-2 py-1.5 text-slate-900">{document.title}</td>
+                          <td className="px-2 py-1.5 text-slate-700">{formatDate(document.issuedAt)}</td>
+                          <td className="px-2 py-1.5 text-slate-700">{formatDate(document.validUntil)}</td>
+                          <td className="px-2 py-1.5 text-slate-700">{document.fileName}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'stops' && (
+              <div>
+                <h2 className="mb-3 text-sm font-semibold text-slate-900">Stops</h2>
+                <div className="space-y-2">
+                  {orderedStops.length === 0 && (
+                    <p className="text-sm text-slate-500">No stops defined for this load.</p>
+                  )}
+                  {orderedStops.map((stop) => (
+                    <article key={stop.id} className="rounded border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        {stop.stopType} #{stop.orderIndex + 1}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-slate-900">
+                        {stop.country}, {stop.postcode}, {stop.city}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">{stop.address}</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Window: {formatDate(stop.dateFrom)}{stop.dateTo ? ` - ${formatDate(stop.dateTo)}` : ''}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Pallets: {stop.pallets ?? '—'} • Notes: {stop.notes ?? '—'}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'freight' && (
+              <div className="grid gap-3 md:grid-cols-2">
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Freight Metrics</h2>
+                  <p className="mt-2 text-xs text-slate-600">
+                    Weight: {toNumber(load?.freightDetails?.weightTons).toFixed(2)} t
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Loading meters: {toNumber(load?.freightDetails?.loadingMeters).toFixed(2)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">Pallets: {palletsTotal}</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Body type: {load?.freightDetails?.bodyType ?? '—'}
+                  </p>
+                </article>
+
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Pallet Details</h2>
+                  {(load?.pallets ?? []).length === 0 && (
+                    <p className="mt-2 text-xs text-slate-500">No pallet rows.</p>
+                  )}
+                  {(load?.pallets ?? []).map((pallet) => (
+                    <p key={pallet.id} className="mt-1 text-xs text-slate-600">
+                      {(pallet.label ?? 'Pallet').trim()} • {pallet.widthCm}x{pallet.heightCm}
+                      {pallet.depthCm ? `x${pallet.depthCm}` : ''} cm • qty {pallet.quantity}
+                    </p>
+                  ))}
+                </article>
+              </div>
+            )}
+
+            {activeSection === 'contacts' && (
+              <div className="grid gap-3 md:grid-cols-2">
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Broker Contact</h2>
+                  <p className="mt-2 text-xs text-slate-600">
+                    Company: {load?.broker?.companyName ?? load?.brokerageName ?? '—'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">Contact person: {load?.contactPerson ?? '—'}</p>
+                  <p className="mt-1 text-xs text-slate-600">Phone: {load?.contactPhone ?? '—'}</p>
+                  <p className="mt-1 text-xs text-slate-600">Email: {load?.contactEmail ?? '—'}</p>
+                </article>
+
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h2 className="text-sm font-semibold text-slate-900">Address Snapshot</h2>
+                  <p className="mt-2 text-xs text-slate-600">
+                    Pickup: {load?.pickupCountry}, {load?.pickupPostcode}, {load?.pickupCity}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">{load?.pickupAddress ?? '—'}</p>
+                  <p className="mt-2 text-xs text-slate-600">
+                    Delivery: {load?.deliveryCountry}, {load?.deliveryPostcode}, {load?.deliveryCity}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">{load?.deliveryAddress ?? '—'}</p>
+                </article>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+
+      {isFlowModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Payment Flow</p>
+                <h3 className="text-base font-semibold text-slate-900">Set Flow</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsFlowModalOpen(false)}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => patchFlowDraft({ flowType: 'INVOITIX' })}
+                className={`rounded border px-2 py-1.5 text-xs font-semibold ${
+                  flowDraft.flowType === 'INVOITIX'
+                    ? 'border-blue-500 bg-blue-100 text-blue-800'
+                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Invoitix
+              </button>
+              <button
+                type="button"
+                onClick={() => patchFlowDraft({ flowType: 'VALUTA' })}
+                className={`rounded border px-2 py-1.5 text-xs font-semibold ${
+                  flowDraft.flowType === 'VALUTA'
+                    ? 'border-amber-500 bg-amber-100 text-amber-800'
+                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Valuta / Skonto
+              </button>
+            </div>
+
+            {flowDraft.flowType === 'VALUTA' && (
+              <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div>
+                  <p className="text-xs font-semibold text-slate-900">Mode</p>
+                  <div className="mt-1 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => patchValutaDraft({ mode: 'VALUTA' })}
+                      className={`flex-1 rounded border px-2 py-1.5 text-xs font-semibold ${
+                        flowDraft.valuta.mode === 'VALUTA'
+                          ? 'border-amber-500 bg-amber-100 text-amber-800'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Valuta
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => patchValutaDraft({ mode: 'SKONTO' })}
+                      className={`flex-1 rounded border px-2 py-1.5 text-xs font-semibold ${
+                        flowDraft.valuta.mode === 'SKONTO'
+                          ? 'border-amber-500 bg-amber-100 text-amber-800'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Skonto
+                    </button>
+                  </div>
+                </div>
+
+                {flowDraft.valuta.mode === 'SKONTO' && (
+                  <label className="block text-xs text-slate-700">
+                    Skonto %
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={flowDraft.valuta.skontoPercent}
+                      onChange={(event) => patchValutaDraft({ skontoPercent: event.target.value })}
+                      className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                    />
+                  </label>
+                )}
+
+                <div>
+                  <p className="text-xs font-semibold text-slate-900">Countdown Start</p>
+                  <div className="mt-1 grid gap-2">
+                    <button
+                      type="button"
+                      onClick={() => patchValutaDraft({ countdownStart: 'ORIGINALS_RECEIVED' })}
+                      className={`rounded border px-2 py-1.5 text-left text-xs font-semibold ${
+                        flowDraft.valuta.countdownStart === 'ORIGINALS_RECEIVED'
+                          ? 'border-amber-500 bg-amber-100 text-amber-800'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Start on originals arrival
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => patchValutaDraft({ countdownStart: 'EMAIL_COPY_INVOICE' })}
+                      className={`rounded border px-2 py-1.5 text-left text-xs font-semibold ${
+                        flowDraft.valuta.countdownStart === 'EMAIL_COPY_INVOICE'
+                          ? 'border-amber-500 bg-amber-100 text-amber-800'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Start on email copy + invoice
+                    </button>
+                  </div>
+                </div>
+
+                <label className="block text-xs text-slate-700">
+                  Countdown Days
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={flowDraft.valuta.countdownDays}
+                    onChange={(event) => patchValutaDraft({ countdownDays: event.target.value })}
+                    className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                  />
+                </label>
+              </div>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsFlowModalOpen(false)}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveFlowSelection()}
+                disabled={!flowDraft.flowType || isSavingPaymentDetails}
+                className="rounded border border-slate-900 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {isSavingPaymentDetails ? 'Saving...' : 'Save Flow'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}

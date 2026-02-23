@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router';
 import { loadApi, vanApi } from '../api';
 import type { Load, Van } from '../domain/entities';
 import { LoadStatus } from '../domain/enums';
@@ -100,6 +101,7 @@ const formatBoardSource = (load: Load): string => {
 };
 
 export default function LoadBoardPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loads, setLoads] = useState<Load[]>([]);
   const [statusFilter, setStatusFilter] = useState<LoadStatusFilter>('ALL');
   const [isLoading, setIsLoading] = useState(false);
@@ -115,6 +117,9 @@ export default function LoadBoardPage() {
   const [bulkPlannerVanId, setBulkPlannerVanId] = useState('');
   const [isBulkAssigning, setIsBulkAssigning] = useState(false);
   const [bulkAssignError, setBulkAssignError] = useState<string | null>(null);
+
+  const focusedLoadId = searchParams.get('loadId')?.trim() ?? '';
+  const isPaymentFocus = searchParams.get('focus') === 'payment';
 
   const fetchLoads = useCallback(async (filter: LoadStatusFilter) => {
     setIsLoading(true);
@@ -176,6 +181,15 @@ export default function LoadBoardPage() {
     setSelectedLoadIds((prev) => prev.filter((id) => loads.some((load) => load.id === id)));
   }, [loads]);
 
+  useEffect(() => {
+    if (!focusedLoadId || loads.length === 0) return;
+
+    const row = document.getElementById(`load-row-${focusedLoadId}`);
+    if (row) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [focusedLoadId, loads]);
+
   const plannerVansById = useMemo(
     () => new Map(plannerVans.map((van) => [van.id, van])),
     [plannerVans],
@@ -233,6 +247,13 @@ export default function LoadBoardPage() {
       setBulkPlannerVanId(plannerVans[0].id);
     }
     setIsBulkAssignOpen(true);
+  };
+
+  const clearFocusedLoad = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('loadId');
+    next.delete('focus');
+    setSearchParams(next);
   };
 
   const handleBulkAddToPlanner = async () => {
@@ -333,6 +354,23 @@ export default function LoadBoardPage() {
               </button>
             ))}
           </div>
+
+          {focusedLoadId && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+              <p className="text-xs text-blue-800">
+                {isPaymentFocus
+                  ? `Payment focus is active for load ${focusedLoadId.slice(0, 8)}...`
+                  : `Focused load ${focusedLoadId.slice(0, 8)}...`}
+              </p>
+              <button
+                type="button"
+                onClick={clearFocusedLoad}
+                className="rounded border border-blue-300 bg-white px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+              >
+                Clear Focus
+              </button>
+            </div>
+          )}
         </header>
 
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -392,7 +430,11 @@ export default function LoadBoardPage() {
                 {!isLoading &&
                   !error &&
                   loads.map((load) => (
-                    <tr key={load.id} className="border-t border-slate-100">
+                    <tr
+                      key={load.id}
+                      id={`load-row-${load.id}`}
+                      className={`border-t border-slate-100 ${focusedLoadId === load.id ? 'bg-blue-50' : ''}`}
+                    >
                       <td className="px-3 py-2">
                         <input
                           type="checkbox"
@@ -401,7 +443,24 @@ export default function LoadBoardPage() {
                           className="h-4 w-4 rounded border-slate-300"
                         />
                       </td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{load.referenceNumber}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-900">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            to={`/loads/${load.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline decoration-slate-300 underline-offset-2 hover:text-blue-700"
+                            title="Open load detail"
+                          >
+                            {load.referenceNumber}
+                          </Link>
+                          {focusedLoadId === load.id && isPaymentFocus && (
+                            <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                              PAYMENT
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-3 py-2">
                         <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${getStatusBadgeClass(load.status)}`}>
                           {load.status}

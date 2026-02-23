@@ -111,6 +111,7 @@ export const dispatchApi = {
 
 // ─── Payments ───────────────────────────────────────────
 export const paymentApi = {
+  getAll: () => api.get<PaymentRecord[]>('/payments'),
   getOne: (id: string) => api.get<PaymentRecord>(`/payments/${id}`),
   getByLoad: (loadId: string) => api.get<PaymentRecord[]>(`/payments?loadId=${loadId}`),
   getByBroker: (brokerId: string) => api.get<PaymentRecord[]>(`/payments?brokerId=${brokerId}`),
