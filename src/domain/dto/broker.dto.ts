@@ -3,7 +3,7 @@ import { ContactRole } from '../enums';
 export interface CreateBrokerCompanyDto {
   companyName: string;
   legalName?: string;
-  taxId: string;
+  taxId?: string;
   vatId?: string;
   street: string;
   city: string;

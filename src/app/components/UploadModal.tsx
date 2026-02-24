@@ -103,12 +103,6 @@ const toOptionalInteger = (value: string): number | undefined => {
 const isValidEmail = (value: string): boolean =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
-const createAutoTaxId = (companyName: string): string => {
-  const slug = companyName.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 10) || 'BROKER';
-  const randomSuffix = Math.random().toString(36).slice(2, 8).toUpperCase();
-  return `AUTO-${slug}-${Date.now()}-${randomSuffix}`;
-};
-
 const splitContactName = (fullName: string): { firstName: string; lastName: string } => {
   const trimmed = fullName.trim();
   if (!trimmed) return { firstName: '', lastName: '' };
@@ -641,7 +635,6 @@ export function UploadModal({
         } else {
           const brokerCreatePayload: CreateBrokerCompanyDto = {
             companyName: brokerName,
-            taxId: createAutoTaxId(brokerName),
             street: brokerCompanyAddress || pickupAddressValue,
             city: form.pickupCity.trim(),
             postcode: form.pickupPostcode.trim(),

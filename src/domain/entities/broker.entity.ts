@@ -4,7 +4,7 @@ import { BrokerRiskLevel, ContactRole } from '../enums';
 export interface BrokerCompany extends BaseEntity {
   companyName: string;
   legalName: string | null;
-  taxId: string;
+  taxId: string | null;
   vatId: string | null;
   street: string;
   city: string;
