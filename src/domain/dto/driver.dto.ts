@@ -17,6 +17,7 @@ export interface CreateDriverDto {
   monthlySalary?: number;
   salaryCurrency?: Currency;
   notes?: string;
+  isActive?: boolean;
 }
 
 export type UpdateDriverDto = Partial<CreateDriverDto>;

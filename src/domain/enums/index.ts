@@ -176,3 +176,11 @@ export enum DriverPayStatus {
   PENDING = 'PENDING',
   PAID = 'PAID',
 }
+
+// ─── Trip ──────────────────────────────────────────────
+export enum TripStatus {
+  PLANNED = 'PLANNED',
+  IN_PROGRESS = 'IN_PROGRESS',
+  COMPLETED = 'COMPLETED',
+  CANCELED = 'CANCELED',
+}

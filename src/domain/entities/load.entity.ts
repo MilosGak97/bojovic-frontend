@@ -56,6 +56,7 @@ export interface Load extends BaseEntity {
   brokerId: string | null;
   brokerContactId: string | null;
   plannerVanId: string | null;
+  tripId: string | null;
 
   // Relations
   broker?: BrokerCompany | null;

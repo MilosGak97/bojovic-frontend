@@ -85,31 +85,33 @@ export function VanSelector({ selectedVanId, onVanChange }: VanSelectorProps) {
   }, []);
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative w-full sm:min-w-[560px] sm:max-w-[760px]" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen((prev) => !prev)}
         disabled={isLoading || vans.length === 0}
-        className="inline-flex items-center gap-2 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm transition-colors hover:border-blue-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex w-full items-center justify-between gap-2 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm transition-colors hover:border-blue-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <Truck className="h-4 w-4 text-blue-600" />
-        {selectedVan ? (
-          <>
-            <span className="font-semibold text-gray-900">{selectedVan.name}</span>
-            <span className="text-gray-500">{selectedVan.licensePlate}</span>
-            <span className="text-gray-500">{getVanTypeLabel(selectedVan.vehicleType)}</span>
-          </>
-        ) : isLoading ? (
-          <span className="font-medium text-gray-600">Loading vehicles...</span>
-        ) : (
-          <span className="font-medium text-gray-600">No vehicles</span>
-        )}
+        <div className="inline-flex min-w-0 items-center gap-2">
+          <Truck className="h-4 w-4 flex-shrink-0 text-blue-600" />
+          {selectedVan ? (
+            <>
+              <span className="truncate font-semibold text-gray-900">{selectedVan.name}</span>
+              <span className="truncate text-gray-500">{selectedVan.licensePlate}</span>
+              <span className="truncate text-gray-500">{getVanTypeLabel(selectedVan.vehicleType)}</span>
+            </>
+          ) : isLoading ? (
+            <span className="font-medium text-gray-600">Loading vehicles...</span>
+          ) : (
+            <span className="font-medium text-gray-600">No vehicles</span>
+          )}
+        </div>
         <ChevronDown
-          className={`h-4 w-4 text-gray-600 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 flex-shrink-0 text-gray-600 transition-transform ${isOpen ? 'rotate-180' : ''}`}
         />
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-[280px] border border-gray-300 bg-white shadow-lg">
+        <div className="absolute left-0 top-full z-50 mt-1 w-full border border-gray-300 bg-white shadow-lg">
           {vans.length === 0 && (
             <div className="px-3 py-2 text-xs text-gray-500">
               {error ?? 'No vehicles available.'}

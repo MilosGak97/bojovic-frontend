@@ -87,6 +87,7 @@ export interface CreateLoadDto {
   brokerId?: string;
   brokerContactId?: string;
   plannerVanId?: string;
+  tripId?: string;
   notes?: string;
 
   freightDetails?: CreateLoadFreightDto;

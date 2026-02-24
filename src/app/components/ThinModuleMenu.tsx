@@ -6,6 +6,7 @@ const QUICK_NAV_ITEMS = [
   { label: 'Load Board', to: '/load-board' },
   { label: 'Dispatching', to: '/dispatching' },
   { label: 'Vehicles', to: '/fleet-monitor' },
+  { label: 'Drivers', to: '/drivers' },
   { label: 'Broker Desk', to: '/broker-desk' },
   { label: 'Payments', to: '/payments' },
   { label: 'Finance', to: '/finance' },

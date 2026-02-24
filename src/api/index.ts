@@ -5,6 +5,7 @@ import type {
   BrokerContact,
   Van,
   Driver,
+  Trip,
   RoutePlan,
   DispatchAssignment,
   PaymentRecord,
@@ -19,9 +20,17 @@ import type {
   MonthlyPnLItem,
 } from '../domain/entities';
 import type { PaginatedResponse } from '../domain/types';
-import type { LoadStatus, ExpenseCategory, ExpenseType } from '../domain/enums';
+import type {
+  LoadStatus,
+  TripStatus,
+  ExpenseCategory,
+  ExpenseType,
+} from '../domain/enums';
 import type {
   CreateBrokerContactDto,
+  CreateTripDto,
+  UpdateTripDto,
+  CompleteTripDto,
   CreateExpenseDto,
   UpdateExpenseDto,
   CreateDriverPayRecordDto,
@@ -80,6 +89,42 @@ export const driverApi = {
   create: (data: unknown) => api.post<Driver>('/drivers', data),
   update: (id: string, data: unknown) => api.put<Driver>(`/drivers/${id}`, data),
   delete: (id: string) => api.delete(`/drivers/${id}`),
+};
+
+// ─── Trips ─────────────────────────────────────────────
+export const tripApi = {
+  create: (data: CreateTripDto) => api.post<Trip>('/trips', data),
+  getAll: (params?: {
+    driverId?: string;
+    vanId?: string;
+    status?: TripStatus;
+    from?: string;
+    to?: string;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.driverId) query.set('driverId', params.driverId);
+    if (params?.vanId) query.set('vanId', params.vanId);
+    if (params?.status) query.set('status', params.status);
+    if (params?.from) query.set('from', params.from);
+    if (params?.to) query.set('to', params.to);
+    const qs = query.toString();
+    return api.get<Trip[]>(`/trips${qs ? `?${qs}` : ''}`);
+  },
+  getActive: () => api.get<Trip[]>('/trips/active'),
+  getOne: (id: string) => api.get<Trip>(`/trips/${id}`),
+  getByDriver: (driverId: string) => api.get<Trip[]>(`/trips/driver/${driverId}`),
+  getActiveByDriver: (driverId: string) =>
+    api.get<Trip | null>(`/trips/driver/${driverId}/active`),
+  update: (id: string, data: UpdateTripDto) => api.patch<Trip>(`/trips/${id}`, data),
+  complete: (id: string, data: CompleteTripDto) =>
+    api.patch<Trip>(`/trips/${id}/complete`, data),
+  cancel: (id: string) => api.patch<Trip>(`/trips/${id}/cancel`, {}),
+  start: (id: string) => api.patch<Trip>(`/trips/${id}/start`, {}),
+  addLoad: (tripId: string, loadId: string) =>
+    api.post<Trip>(`/trips/${tripId}/loads/${loadId}`, {}),
+  removeLoad: (tripId: string, loadId: string) =>
+    api.delete<Trip>(`/trips/${tripId}/loads/${loadId}`),
+  delete: (id: string) => api.delete(`/trips/${id}`),
 };
 
 // ─── Routes ─────────────────────────────────────────────

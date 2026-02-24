@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import App from './app/App.tsx';
 import FleetMonitorPage from './app/FleetMonitorPage.tsx';
 import FinancePage from './app/FinancePage.tsx';
+import DriversPage from './app/DriversPage.tsx';
 import HomePage from './app/HomePage.tsx';
 import LoadDetailPage from './app/LoadDetailPage.tsx';
 import LoadBoardPage from './app/LoadBoardPage.tsx';
@@ -19,6 +20,7 @@ createRoot(document.getElementById('root')!).render(
       <Route path="/load-board" element={<LoadBoardPage />} />
       <Route path="/loads/:loadId" element={<LoadDetailPage />} />
       <Route path="/fleet-monitor" element={<FleetMonitorPage />} />
+      <Route path="/drivers" element={<DriversPage />} />
       <Route path="/finance" element={<FinancePage />} />
       {dashboardModules
         .filter((module) => !module.ready)

@@ -4,6 +4,7 @@ import type { Driver } from './driver.entity';
 
 export interface Van extends BaseEntity {
   name: string;
+  vehicleId: string | null;
   licensePlate: string;
   status: VanStatus;
   vehicleType: VanType;

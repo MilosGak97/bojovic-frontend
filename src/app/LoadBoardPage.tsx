@@ -357,7 +357,9 @@ export default function LoadBoardPage() {
       const driverName = van.assignedDriver
         ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
         : '';
-      return `${van.name} ${van.licensePlate} ${driverName}`.toLowerCase().includes(term);
+      return `${van.name} ${van.vehicleId ?? ''} ${van.licensePlate} ${driverName}`
+        .toLowerCase()
+        .includes(term);
     });
   }, [bulkVehicleSearch, plannerVans]);
 
@@ -368,7 +370,9 @@ export default function LoadBoardPage() {
       const driverName = van.assignedDriver
         ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
         : '';
-      return `${van.name} ${van.licensePlate} ${driverName}`.toLowerCase().includes(term);
+      return `${van.name} ${van.vehicleId ?? ''} ${van.licensePlate} ${driverName}`
+        .toLowerCase()
+        .includes(term);
     });
   }, [plannerVans, singleVehicleSearch]);
 
@@ -598,34 +602,36 @@ export default function LoadBoardPage() {
           onClick={() => setIsBulkAssignOpen(false)}
         >
           <section
-            className="w-full max-w-6xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            className="w-full max-w-[700px] overflow-x-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold text-slate-900">Add Loads To Load Planner</h3>
-            <p className="mt-1 text-xs text-slate-600">
-              {selectedLoadIds.length} selected load(s)
-            </p>
+            <div className="mx-auto w-full md:w-[616px]">
+              <h3 className="text-sm font-semibold text-slate-900">Add Loads To Load Planner</h3>
+              <p className="mt-1 text-xs text-slate-600">
+                {selectedLoadIds.length} selected load(s)
+              </p>
+            </div>
 
-            <label className="mt-3 block text-xs text-slate-600">
+            <label className="mx-auto mt-3 block w-full text-xs text-slate-600 md:w-[616px]">
               Search Vehicle
               <input
                 type="text"
                 value={bulkVehicleSearch}
                 onChange={(event) => setBulkVehicleSearch(event.target.value)}
-                placeholder="Search by vehicle name, plate, or assigned driver..."
+                placeholder="Search by name, vehicle ID, plate, or assigned driver..."
                 disabled={isLoadingPlannerVans || plannerVans.length === 0 || isBulkAssigning}
                 className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100"
               />
             </label>
 
-            <div className="mt-2 grid max-h-72 grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 overflow-y-auto pr-1">
+            <div className="mx-auto mt-2 grid max-h-72 w-full grid-cols-1 gap-2 overflow-y-auto md:w-[616px] md:grid-cols-[repeat(3,200px)] md:justify-center">
               {isLoadingPlannerVans && (
-                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
                   Loading vehicles...
                 </p>
               )}
               {!isLoadingPlannerVans && filteredBulkPlannerVans.length === 0 && (
-                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
                   No vehicles match this search.
                 </p>
               )}
@@ -645,6 +651,7 @@ export default function LoadBoardPage() {
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       <p className="text-sm font-semibold text-slate-900">{van.name}</p>
+                      <p className="text-xs text-slate-500">{van.vehicleId ?? 'No vehicle ID'}</p>
                       <p className="text-xs text-slate-600">{van.licensePlate}</p>
                       <p className="mt-0.5 text-xs text-slate-500">
                         Driver:{' '}
@@ -656,19 +663,23 @@ export default function LoadBoardPage() {
                   );
                 })}
             </div>
-            {plannerVansError && <span className="mt-1 block text-[11px] text-rose-600">{plannerVansError}</span>}
+            {plannerVansError && (
+              <span className="mx-auto mt-1 block w-full text-[11px] text-rose-600 md:w-[616px]">
+                {plannerVansError}
+              </span>
+            )}
 
             {bulkAssignError && (
-              <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+              <p className="mx-auto mt-2 w-full rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 md:w-[616px]">
                 {bulkAssignError}
               </p>
             )}
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mx-auto mt-4 flex w-full flex-col-reverse gap-2 md:w-[616px] sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setIsBulkAssignOpen(false)}
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className="w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 sm:w-auto"
                 disabled={isBulkAssigning}
               >
                 Cancel
@@ -677,7 +688,7 @@ export default function LoadBoardPage() {
                 type="button"
                 onClick={() => void handleBulkAddToPlanner()}
                 disabled={isBulkAssigning || !bulkPlannerVanId || selectedLoadIds.length === 0}
-                className="rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 {isBulkAssigning ? 'Assigning...' : 'Add To Planner'}
               </button>
@@ -692,34 +703,36 @@ export default function LoadBoardPage() {
           onClick={closeSingleAssign}
         >
           <section
-            className="w-full max-w-6xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            className="w-full max-w-[700px] overflow-x-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold text-slate-900">Add Load To Planner</h3>
-            <p className="mt-1 text-xs text-slate-600">
-              Load: <span className="font-semibold text-slate-800">{singlePlannerLoad.referenceNumber}</span>
-            </p>
+            <div className="mx-auto w-full md:w-[616px]">
+              <h3 className="text-sm font-semibold text-slate-900">Add Load To Planner</h3>
+              <p className="mt-1 text-xs text-slate-600">
+                Load: <span className="font-semibold text-slate-800">{singlePlannerLoad.referenceNumber}</span>
+              </p>
+            </div>
 
-            <label className="mt-3 block text-xs text-slate-600">
+            <label className="mx-auto mt-3 block w-full text-xs text-slate-600 md:w-[616px]">
               Search Vehicle
               <input
                 type="text"
                 value={singleVehicleSearch}
                 onChange={(event) => setSingleVehicleSearch(event.target.value)}
-                placeholder="Search by vehicle name, plate, or assigned driver..."
+                placeholder="Search by name, vehicle ID, plate, or assigned driver..."
                 disabled={isLoadingPlannerVans || plannerVans.length === 0 || isSingleAssigning}
                 className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100"
               />
             </label>
 
-            <div className="mt-2 grid max-h-72 grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 overflow-y-auto pr-1">
+            <div className="mx-auto mt-2 grid max-h-72 w-full grid-cols-1 gap-2 overflow-y-auto md:w-[616px] md:grid-cols-[repeat(3,200px)] md:justify-center">
               {isLoadingPlannerVans && (
-                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
                   Loading vehicles...
                 </p>
               )}
               {!isLoadingPlannerVans && filteredSinglePlannerVans.length === 0 && (
-                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
                   No vehicles match this search.
                 </p>
               )}
@@ -739,6 +752,7 @@ export default function LoadBoardPage() {
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
                       <p className="text-sm font-semibold text-slate-900">{van.name}</p>
+                      <p className="text-xs text-slate-500">{van.vehicleId ?? 'No vehicle ID'}</p>
                       <p className="text-xs text-slate-600">{van.licensePlate}</p>
                       <p className="mt-0.5 text-xs text-slate-500">
                         Driver:{' '}
@@ -750,19 +764,23 @@ export default function LoadBoardPage() {
                   );
                 })}
             </div>
-            {plannerVansError && <span className="mt-1 block text-[11px] text-rose-600">{plannerVansError}</span>}
+            {plannerVansError && (
+              <span className="mx-auto mt-1 block w-full text-[11px] text-rose-600 md:w-[616px]">
+                {plannerVansError}
+              </span>
+            )}
 
             {singleAssignError && (
-              <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+              <p className="mx-auto mt-2 w-full rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700 md:w-[616px]">
                 {singleAssignError}
               </p>
             )}
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="mx-auto mt-4 flex w-full flex-col-reverse gap-2 md:w-[616px] sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={closeSingleAssign}
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className="w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 sm:w-auto"
                 disabled={isSingleAssigning}
               >
                 Cancel
@@ -771,7 +789,7 @@ export default function LoadBoardPage() {
                 type="button"
                 onClick={() => void handleSingleAddToPlanner()}
                 disabled={isSingleAssigning || !singlePlannerVanId}
-                className="rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 {isSingleAssigning ? 'Assigning...' : 'Add To Planner'}
               </button>

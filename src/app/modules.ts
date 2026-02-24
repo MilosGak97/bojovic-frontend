@@ -37,6 +37,12 @@ export const dashboardModules: ModuleDefinition[] = [
     ready: true,
   },
   {
+    title: 'Drivers',
+    path: '/drivers',
+    description: 'Manage drivers, track trips, and view assignment history.',
+    ready: true,
+  },
+  {
     title: 'Payments',
     path: '/payments',
     description: 'Follow invoice lifecycle, overdue records, and settlement stats.',

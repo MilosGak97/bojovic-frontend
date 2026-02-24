@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
-import { driverApi, vanApi } from '../api';
+import { vanApi } from '../api';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
 import type { CreateVanDto } from '../domain/dto';
-import type { Driver, Van } from '../domain/entities';
+import type { Van } from '../domain/entities';
 import { VanStatus, VanType } from '../domain/enums';
 
 const VEHICLE_TYPE_OPTIONS: Array<{
@@ -57,24 +57,20 @@ const toPositiveInteger = (value: string): number | null => {
 
 export default function FleetMonitorPage() {
   const [vans, setVans] = useState<Van[]>([]);
-  const [drivers, setDrivers] = useState<Driver[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingDrivers, setIsLoadingDrivers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [updatingDriverVanId, setUpdatingDriverVanId] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [driversError, setDriversError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     name: '',
+    vehicleId: '',
     licensePlate: '',
     vehicleType: VanType.CARGO_VAN,
     cargoLengthCm: '403',
     cargoWidthCm: '220',
     cargoHeightCm: '220',
-    assignedDriverId: '',
   });
 
   const loadVans = useCallback(async () => {
@@ -94,24 +90,6 @@ export default function FleetMonitorPage() {
   useEffect(() => {
     void loadVans();
   }, [loadVans]);
-
-  const loadDrivers = useCallback(async () => {
-    setIsLoadingDrivers(true);
-    setDriversError(null);
-    try {
-      const response = await driverApi.getAll();
-      setDrivers(response.filter((driver) => driver.isActive));
-    } catch (requestError) {
-      setDrivers([]);
-      setDriversError(requestError instanceof Error ? requestError.message : 'Failed to load drivers.');
-    } finally {
-      setIsLoadingDrivers(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadDrivers();
-  }, [loadDrivers]);
 
   const selectedType = useMemo(
     () => VEHICLE_TYPE_OPTIONS.find((option) => option.value === form.vehicleType) ?? VEHICLE_TYPE_OPTIONS[2],
@@ -147,6 +125,7 @@ export default function FleetMonitorPage() {
 
     const payload: CreateVanDto = {
       name: form.name.trim(),
+      ...(form.vehicleId.trim() ? { vehicleId: form.vehicleId.trim() } : {}),
       licensePlate: form.licensePlate.trim(),
       status: VanStatus.AVAILABLE,
       vehicleType: form.vehicleType,
@@ -155,7 +134,6 @@ export default function FleetMonitorPage() {
       cargoWidthCm,
       cargoHeightCm,
       ...(estimatedPallets > 0 ? { maxPallets: estimatedPallets } : {}),
-      ...(form.assignedDriverId ? { assignedDriverId: form.assignedDriverId } : {}),
     };
 
     setIsSubmitting(true);
@@ -163,12 +141,12 @@ export default function FleetMonitorPage() {
       await vanApi.create(payload);
       setForm({
         name: '',
+        vehicleId: '',
         licensePlate: '',
         vehicleType: form.vehicleType,
         cargoLengthCm: '403',
         cargoWidthCm: '220',
         cargoHeightCm: '220',
-        assignedDriverId: '',
       });
       setIsCreateModalOpen(false);
       await loadVans();
@@ -185,32 +163,6 @@ export default function FleetMonitorPage() {
       await loadVans();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to delete vehicle.');
-    }
-  };
-
-  const handleAssignDriver = async (van: Van, driverId: string) => {
-    setUpdatingDriverVanId(van.id);
-    setError(null);
-    try {
-      await vanApi.update(van.id, {
-        assignedDriverId: driverId || null,
-      });
-      const selectedDriver = drivers.find((driver) => driver.id === driverId) ?? null;
-      setVans((prev) =>
-        prev.map((row) =>
-          row.id === van.id
-            ? {
-                ...row,
-                assignedDriverId: driverId || null,
-                assignedDriver: selectedDriver,
-              }
-            : row,
-        ),
-      );
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to assign driver.');
-    } finally {
-      setUpdatingDriverVanId(null);
     }
   };
 
@@ -252,6 +204,7 @@ export default function FleetMonitorPage() {
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-3 py-2">Name</th>
+                    <th className="px-3 py-2">Vehicle ID</th>
                     <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">License</th>
                     <th className="px-3 py-2">Cargo (cm)</th>
@@ -265,7 +218,7 @@ export default function FleetMonitorPage() {
                 <tbody>
                   {isLoading && (
                     <tr>
-                      <td className="px-3 py-5 text-center text-slate-500" colSpan={9}>
+                      <td className="px-3 py-5 text-center text-slate-500" colSpan={10}>
                         Loading vehicles...
                       </td>
                     </tr>
@@ -273,7 +226,7 @@ export default function FleetMonitorPage() {
 
                   {!isLoading && error && (
                     <tr>
-                      <td className="px-3 py-5 text-center text-rose-600" colSpan={9}>
+                      <td className="px-3 py-5 text-center text-rose-600" colSpan={10}>
                         {error}
                       </td>
                     </tr>
@@ -281,7 +234,7 @@ export default function FleetMonitorPage() {
 
                   {!isLoading && !error && vans.length === 0 && (
                     <tr>
-                      <td className="px-3 py-5 text-center text-slate-500" colSpan={9}>
+                      <td className="px-3 py-5 text-center text-slate-500" colSpan={10}>
                         No vehicles yet.
                       </td>
                     </tr>
@@ -292,6 +245,7 @@ export default function FleetMonitorPage() {
                     vans.map((van) => (
                       <tr key={van.id} className="border-t border-slate-100">
                         <td className="px-3 py-2 font-semibold text-slate-900">{van.name}</td>
+                        <td className="px-3 py-2 text-slate-700">{van.vehicleId ?? '—'}</td>
                         <td className="px-3 py-2 text-slate-700">
                           {VEHICLE_TYPE_LABEL[van.vehicleType] ?? van.vehicleType}
                         </td>
@@ -304,19 +258,9 @@ export default function FleetMonitorPage() {
                           {van.maxPallets ?? '—'}
                         </td>
                         <td className="px-3 py-2 text-slate-700">
-                          <select
-                            value={van.assignedDriverId ?? ''}
-                            onChange={(event) => void handleAssignDriver(van, event.target.value)}
-                            disabled={isLoadingDrivers || updatingDriverVanId === van.id}
-                            className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 disabled:bg-slate-100"
-                          >
-                            <option value="">Unassigned</option>
-                            {drivers.map((driver) => (
-                              <option key={driver.id} value={driver.id}>
-                                {driver.firstName} {driver.lastName}
-                              </option>
-                            ))}
-                          </select>
+                          {van.assignedDriver
+                            ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+                            : 'Unassigned'}
                         </td>
                         <td className="px-3 py-2 text-slate-700">{van.status}</td>
                         <td className="px-3 py-2 text-right">
@@ -334,11 +278,6 @@ export default function FleetMonitorPage() {
                 </tbody>
               </table>
             </div>
-            {driversError && (
-              <p className="border-t border-rose-100 px-3 py-2 text-xs text-rose-600">
-                {driversError}
-              </p>
-            )}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -419,6 +358,19 @@ export default function FleetMonitorPage() {
               </label>
 
               <label className="block text-xs text-slate-600">
+                Vehicle ID (optional)
+                <input
+                  type="text"
+                  value={form.vehicleId}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, vehicleId: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                  placeholder="e.g. V-001"
+                />
+              </label>
+
+              <label className="block text-xs text-slate-600">
                 License Plate
                 <input
                   type="text"
@@ -446,25 +398,6 @@ export default function FleetMonitorPage() {
                   {VEHICLE_TYPE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block text-xs text-slate-600">
-                Assigned Driver (optional)
-                <select
-                  value={form.assignedDriverId}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, assignedDriverId: event.target.value }))
-                  }
-                  disabled={isLoadingDrivers}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
-                >
-                  <option value="">Unassigned</option>
-                  {drivers.map((driver) => (
-                    <option key={driver.id} value={driver.id}>
-                      {driver.firstName} {driver.lastName}
                     </option>
                   ))}
                 </select>
