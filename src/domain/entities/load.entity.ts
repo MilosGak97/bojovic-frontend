@@ -7,7 +7,7 @@ import {
   LoadBoardSource,
 } from '../enums';
 import { BrokerCompany, BrokerContact } from './broker.entity';
-import { Van } from './van.entity';
+import type { Trip } from './trip.entity';
 
 export interface Load extends BaseEntity {
   referenceNumber: string;
@@ -55,13 +55,12 @@ export interface Load extends BaseEntity {
   notes: string | null;
   brokerId: string | null;
   brokerContactId: string | null;
-  plannerVanId: string | null;
   tripId: string | null;
 
   // Relations
   broker?: BrokerCompany | null;
   brokerContact?: BrokerContact | null;
-  plannerVan?: Van | null;
+  trip?: Trip | null;
   stops?: LoadStop[];
   freightDetails?: LoadFreightDetails;
   pallets?: LoadPallet[];

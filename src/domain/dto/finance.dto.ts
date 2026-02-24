@@ -38,3 +38,15 @@ export interface CreateDriverPayRecordDto {
 }
 
 export type UpdateDriverPayRecordDto = Partial<CreateDriverPayRecordDto>;
+
+export interface CreateCustomIncomeDto {
+  amount: number;
+  currency?: Currency;
+  incomeDate: string;
+  description: string;
+  category?: string;
+  referenceNumber?: string;
+  notes?: string;
+}
+
+export type UpdateCustomIncomeDto = Partial<CreateCustomIncomeDto>;

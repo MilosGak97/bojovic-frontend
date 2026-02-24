@@ -209,7 +209,7 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
         ? String(apiLoad.paymentTermDays)
         : undefined,
     isInactive: apiLoad.isInactive ?? false,
-    plannerVanId: apiLoad.plannerVanId ?? undefined,
+    tripId: apiLoad.tripId ?? undefined,
     palletDimensions,
     extraStops: getExtraStopsFromApi(apiLoad),
   };
@@ -382,7 +382,7 @@ export const buildLoadUpsertDto = (load: PlannerLoad): CreateLoadDto => {
     ...(load.contactPerson ? { contactPerson: load.contactPerson } : {}),
     ...(load.phone ? { contactPhone: load.phone } : {}),
     ...(load.email ? { contactEmail: load.email } : {}),
-    ...(load.plannerVanId ? { plannerVanId: load.plannerVanId } : {}),
+    ...(load.tripId ? { tripId: load.tripId } : {}),
     vehicleMonitoringRequired: false,
     ...(load.originTranseuLink ? { originTranseuLink: load.originTranseuLink } : {}),
     ...(load.destTranseuLink ? { destTranseuLink: load.destTranseuLink } : {}),

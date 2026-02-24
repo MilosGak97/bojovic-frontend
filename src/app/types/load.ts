@@ -28,7 +28,7 @@ export interface PlannerLoad {
   email?: string;
   paymentTerms?: string;
   isInactive?: boolean;
-  plannerVanId?: string;
+  tripId?: string;
   palletDimensions?: Array<{
     width: number;
     height: number;

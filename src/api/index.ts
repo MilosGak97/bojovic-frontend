@@ -12,6 +12,7 @@ import type {
   Document,
   Expense,
   DriverPayRecord,
+  CustomIncome,
   PeriodSummary,
   ExpenseBreakdownItem,
   CashFlow,
@@ -31,10 +32,12 @@ import type {
   CreateTripDto,
   UpdateTripDto,
   CompleteTripDto,
+  StartTripDto,
   CreateExpenseDto,
   UpdateExpenseDto,
   CreateDriverPayRecordDto,
   UpdateDriverPayRecordDto,
+  CreateCustomIncomeDto,
 } from '../domain/dto';
 
 // ─── Loads ──────────────────────────────────────────────
@@ -119,7 +122,7 @@ export const tripApi = {
   complete: (id: string, data: CompleteTripDto) =>
     api.patch<Trip>(`/trips/${id}/complete`, data),
   cancel: (id: string) => api.patch<Trip>(`/trips/${id}/cancel`, {}),
-  start: (id: string) => api.patch<Trip>(`/trips/${id}/start`, {}),
+  start: (id: string, data: StartTripDto) => api.patch<Trip>(`/trips/${id}/start`, data),
   addLoad: (tripId: string, loadId: string) =>
     api.post<Trip>(`/trips/${tripId}/loads/${loadId}`, {}),
   removeLoad: (tripId: string, loadId: string) =>
@@ -223,6 +226,22 @@ export const driverPayApi = {
     api.put<DriverPayRecord>(`/finance/driver-pay/${id}`, data),
   markPaid: (id: string, paidDate?: string) =>
     api.patch<DriverPayRecord>(`/finance/driver-pay/${id}/paid`, { paidDate }),
+};
+
+export const customIncomeApi = {
+  create: (data: CreateCustomIncomeDto) => api.post<CustomIncome>('/finance/custom-income', data),
+  getAll: (params?: { from?: string; to?: string; category?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.from) query.set('from', params.from);
+    if (params?.to) query.set('to', params.to);
+    if (params?.category) query.set('category', params.category);
+    const qs = query.toString();
+    return api.get<CustomIncome[]>(`/finance/custom-income${qs ? `?${qs}` : ''}`);
+  },
+  getOne: (id: string) => api.get<CustomIncome>(`/finance/custom-income/${id}`),
+  update: (id: string, data: Partial<CreateCustomIncomeDto>) =>
+    api.put<CustomIncome>(`/finance/custom-income/${id}`, data),
+  delete: (id: string) => api.delete(`/finance/custom-income/${id}`),
 };
 
 export const financeReportApi = {

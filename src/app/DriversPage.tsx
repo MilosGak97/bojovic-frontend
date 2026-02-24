@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ban, CheckCircle2, Pencil, Plus, Play, X } from 'lucide-react';
 import { driverApi, tripApi, vanApi } from '../api';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
+import { CreateTripModal } from './components/CreateTripModal';
+import { DateTimePicker } from './components/DateTimePicker';
 import type {
   CompleteTripDto,
   CreateDriverDto,
   CreateTripDto,
+  StartTripDto,
 } from '../domain/dto';
 import type { Driver, Trip, Van } from '../domain/entities';
 import { DriverStatus, TripStatus, VanStatus } from '../domain/enums';
@@ -138,16 +141,21 @@ export default function DriversPage() {
   const [isLoadingDriverTrips, setIsLoadingDriverTrips] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedCellKey, setCopiedCellKey] = useState<string | null>(null);
+  const [driverSearch, setDriverSearch] = useState('');
+  const [driverActiveFilter, setDriverActiveFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+  const [driverAvailabilityFilter, setDriverAvailabilityFilter] = useState<
+    'ALL' | 'AVAILABLE' | 'NOT_AVAILABLE'
+  >('ALL');
 
   const [driverModalOpen, setDriverModalOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [driverForm, setDriverForm] = useState<DriverFormState>(DEFAULT_DRIVER_FORM);
 
   const [startTripModalOpen, setStartTripModalOpen] = useState(false);
+  const [startTripDriverId, setStartTripDriverId] = useState('');
   const [startTripVanId, setStartTripVanId] = useState('');
   const [startTripDeparture, setStartTripDeparture] = useState(toDatetimeLocalValue());
-  const [startTripOdometer, setStartTripOdometer] = useState('');
-  const [startTripNotes, setStartTripNotes] = useState('');
 
   const [completeTripModalOpen, setCompleteTripModalOpen] = useState(false);
   const [completeTripDate, setCompleteTripDate] = useState(toDatetimeLocalValue());
@@ -166,18 +174,60 @@ export default function DriversPage() {
     return map;
   }, [activeTrips]);
 
-  const activeVanIds = useMemo(() => new Set(activeTrips.map((trip) => trip.vanId)), [activeTrips]);
+  const filteredDrivers = useMemo(() => {
+    const searchTerm = driverSearch.trim().toLowerCase();
+
+    return drivers.filter((driver) => {
+      if (driverActiveFilter === 'ACTIVE' && !driver.isActive) return false;
+      if (driverActiveFilter === 'INACTIVE' && driver.isActive) return false;
+
+      if (driverAvailabilityFilter === 'AVAILABLE' && driver.status !== DriverStatus.AVAILABLE) {
+        return false;
+      }
+      if (
+        driverAvailabilityFilter === 'NOT_AVAILABLE' &&
+        driver.status === DriverStatus.AVAILABLE
+      ) {
+        return false;
+      }
+
+      if (!searchTerm) return true;
+
+      const searchable = [
+        driver.firstName,
+        driver.lastName,
+        driver.email ?? '',
+        driver.phone ?? '',
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return searchable.includes(searchTerm);
+    });
+  }, [drivers, driverActiveFilter, driverAvailabilityFilter, driverSearch]);
+
+  const plannedVanIds = useMemo(
+    () =>
+      new Set(
+        activeTrips
+          .filter((trip) => trip.status === TripStatus.PLANNED)
+          .map((trip) => trip.vanId),
+      ),
+    [activeTrips],
+  );
 
   const selectedActiveTrip = useMemo(() => {
     if (!selectedDriver) return null;
     return activeTripByDriver.get(selectedDriver.id) ?? null;
   }, [activeTripByDriver, selectedDriver]);
 
-  const availableVansForTrip = useMemo(() => {
+  const planningVansForTrip = useMemo(() => {
     return vans.filter(
-      (van) => van.status === VanStatus.AVAILABLE && !activeVanIds.has(van.id),
+      (van) =>
+        [VanStatus.AVAILABLE, VanStatus.ON_ROUTE].includes(van.status) &&
+        !plannedVanIds.has(van.id),
     );
-  }, [vans, activeVanIds]);
+  }, [vans, plannedVanIds]);
 
   const loadPageData = useCallback(async () => {
     setIsLoading(true);
@@ -300,24 +350,40 @@ export default function DriversPage() {
     }
   };
 
-  const openStartTripModal = () => {
-    const firstVan = availableVansForTrip[0];
+  const copyText = async (value: string, key: string) => {
+    if (!value.trim()) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedCellKey(key);
+      window.setTimeout(() => {
+        setCopiedCellKey((prev) => (prev === key ? null : prev));
+      }, 1200);
+    } catch {
+      setError('Failed to copy to clipboard.');
+    }
+  };
+
+  const openStartTripModal = (driverId?: string) => {
+    const resolvedDriverId = driverId ?? selectedDriverId ?? '';
+    setStartTripDriverId(resolvedDriverId);
+    if (resolvedDriverId) {
+      setSelectedDriverId(resolvedDriverId);
+    }
+
+    const firstVan = planningVansForTrip[0];
     setStartTripVanId(firstVan?.id ?? '');
     setStartTripDeparture(toDatetimeLocalValue());
-    setStartTripOdometer(firstVan?.odometerKm ? String(firstVan.odometerKm) : '');
-    setStartTripNotes('');
     setStartTripModalOpen(true);
   };
 
   const closeStartTripModal = () => {
     setStartTripModalOpen(false);
+    setStartTripDriverId('');
     setStartTripVanId('');
-    setStartTripOdometer('');
-    setStartTripNotes('');
   };
 
   const handleStartTrip = async () => {
-    if (!selectedDriver) {
+    if (!startTripDriverId) {
       setError('Select a driver first.');
       return;
     }
@@ -326,33 +392,45 @@ export default function DriversPage() {
       setError('Select a vehicle for the trip.');
       return;
     }
-    if (!startTripDeparture) {
-      setError('Departure date and time are required.');
+
+    const isVanSelectable = planningVansForTrip.some((van) => van.id === startTripVanId);
+    if (!isVanSelectable) {
+      setError('Selected vehicle is no longer available.');
       return;
     }
 
+    const selectedDriver = drivers.find((driver) => driver.id === startTripDriverId) ?? null;
+    if (!selectedDriver) {
+      setError('Selected driver no longer exists.');
+      return;
+    }
+    if (!selectedDriver.isActive || selectedDriver.status !== DriverStatus.AVAILABLE) {
+      setError('Selected driver is not available.');
+      return;
+    }
+
+    if (!startTripDeparture) {
+      setError('Loadboard from date and time are required.');
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
 
     try {
       const createPayload: CreateTripDto = {
-        driverId: selectedDriver.id,
+        driverId: startTripDriverId,
         vanId: startTripVanId,
+        loadboardFromDate: toIso(startTripDeparture),
         departureDate: toIso(startTripDeparture),
-        ...(startTripOdometer.trim()
-          ? { startOdometerKm: Number(startTripOdometer) }
-          : {}),
-        ...(startTripNotes.trim() ? { notes: startTripNotes.trim() } : {}),
       };
 
-      const createdTrip = await tripApi.create(createPayload);
-      await tripApi.start(createdTrip.id);
+      await tripApi.create(createPayload);
 
       closeStartTripModal();
       await loadPageData();
       await loadSelectedDriverTrips(selectedDriver.id);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to start trip.');
+      setError(requestError instanceof Error ? requestError.message : 'Failed to create trip.');
     } finally {
       setIsSubmitting(false);
     }
@@ -418,6 +496,33 @@ export default function DriversPage() {
     }
   };
 
+  const handleStartPlannedTrip = async () => {
+    if (!selectedActiveTrip || selectedActiveTrip.status !== TripStatus.PLANNED) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const payload: StartTripDto = {
+        departureDate: toIso(toDatetimeLocalValue(selectedActiveTrip.loadboardFromDate)),
+        ...(selectedActiveTrip.plannedEndDate
+          ? { plannedEndDate: selectedActiveTrip.plannedEndDate }
+          : {}),
+        ...(selectedActiveTrip.startOdometerKm !== null
+          ? { startOdometerKm: selectedActiveTrip.startOdometerKm }
+          : {}),
+      };
+
+      await tripApi.start(selectedActiveTrip.id, payload);
+      await loadPageData();
+      await loadSelectedDriverTrips(selectedActiveTrip.driverId);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to start trip.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const selectedDriverTripHistory = useMemo(
     () =>
       selectedDriverTrips.filter((trip) =>
@@ -460,6 +565,76 @@ export default function DriversPage() {
           </p>
         )}
 
+        <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="text-xs text-slate-600 sm:col-span-2">
+              Search Drivers
+              <input
+                type="text"
+                value={driverSearch}
+                onChange={(event) => setDriverSearch(event.target.value)}
+                placeholder="Search by name, email, or phone..."
+                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              />
+            </label>
+
+            <label className="text-xs text-slate-600">
+              Active
+              <select
+                value={driverActiveFilter}
+                onChange={(event) =>
+                  setDriverActiveFilter(event.target.value as 'ALL' | 'ACTIVE' | 'INACTIVE')
+                }
+                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              >
+                <option value="ALL">All</option>
+                <option value="ACTIVE">Active only</option>
+                <option value="INACTIVE">Inactive only</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-semibold text-slate-600">Availability:</span>
+            <button
+              type="button"
+              onClick={() => setDriverAvailabilityFilter('ALL')}
+              className={`rounded border px-2 py-1 font-semibold ${
+                driverAvailabilityFilter === 'ALL'
+                  ? 'border-slate-900 bg-slate-900 text-white'
+                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => setDriverAvailabilityFilter('AVAILABLE')}
+              className={`rounded border px-2 py-1 font-semibold ${
+                driverAvailabilityFilter === 'AVAILABLE'
+                  ? 'border-emerald-700 bg-emerald-700 text-white'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              }`}
+            >
+              Available
+            </button>
+            <button
+              type="button"
+              onClick={() => setDriverAvailabilityFilter('NOT_AVAILABLE')}
+              className={`rounded border px-2 py-1 font-semibold ${
+                driverAvailabilityFilter === 'NOT_AVAILABLE'
+                  ? 'border-blue-700 bg-blue-700 text-white'
+                  : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+              }`}
+            >
+              Not Available
+            </button>
+            <span className="ml-auto text-slate-500">
+              {filteredDrivers.length} result(s)
+            </span>
+          </div>
+        </section>
+
         <div className="grid gap-5 xl:grid-cols-[1.35fr_1fr]">
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
@@ -469,8 +644,7 @@ export default function DriversPage() {
                     <th className="px-3 py-2">Name</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Phone</th>
-                    <th className="px-3 py-2">License</th>
-                    <th className="px-3 py-2">Hired</th>
+                    <th className="px-3 py-2">Email</th>
                     <th className="px-3 py-2">Active Trip</th>
                     <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
@@ -478,22 +652,22 @@ export default function DriversPage() {
                 <tbody>
                   {isLoading && (
                     <tr>
-                      <td className="px-3 py-6 text-center text-slate-500" colSpan={7}>
+                      <td className="px-3 py-6 text-center text-slate-500" colSpan={6}>
                         Loading drivers...
                       </td>
                     </tr>
                   )}
 
-                  {!isLoading && drivers.length === 0 && (
+                  {!isLoading && filteredDrivers.length === 0 && (
                     <tr>
-                      <td className="px-3 py-6 text-center text-slate-500" colSpan={7}>
-                        No drivers found.
+                      <td className="px-3 py-6 text-center text-slate-500" colSpan={6}>
+                        No drivers match current filters.
                       </td>
                     </tr>
                   )}
 
                   {!isLoading &&
-                    drivers.map((driver) => {
+                    filteredDrivers.map((driver) => {
                       const activeTrip = activeTripByDriver.get(driver.id);
                       const isSelected = driver.id === selectedDriverId;
 
@@ -506,9 +680,21 @@ export default function DriversPage() {
                           onClick={() => setSelectedDriverId(driver.id)}
                         >
                           <td className="px-3 py-2">
-                            <p className="font-semibold text-slate-900">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void copyText(`${driver.firstName} ${driver.lastName}`, `name-${driver.id}`);
+                              }}
+                              className={`font-semibold transition-colors ${
+                                copiedCellKey === `name-${driver.id}`
+                                  ? 'text-emerald-600'
+                                  : 'text-slate-900 hover:text-slate-700'
+                              }`}
+                              title="Copy name"
+                            >
                               {driver.firstName} {driver.lastName}
-                            </p>
+                            </button>
                             {!driver.isActive && (
                               <p className="text-[11px] font-medium text-rose-600">Inactive</p>
                             )}
@@ -520,21 +706,85 @@ export default function DriversPage() {
                               {driver.status}
                             </span>
                           </td>
-                          <td className="px-3 py-2 text-slate-700">{driver.phone ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-700">{driver.driverLicenseNumber ?? '—'}</td>
-                          <td className="px-3 py-2 text-slate-700">{formatDate(driver.hiredAt)}</td>
+                          <td className="px-3 py-2 text-slate-700">
+                            {driver.phone ? (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void copyText(driver.phone ?? '', `phone-${driver.id}`);
+                                }}
+                                className={`transition-colors ${
+                                  copiedCellKey === `phone-${driver.id}`
+                                    ? 'text-emerald-600'
+                                    : 'hover:text-slate-900'
+                                }`}
+                                title="Copy phone"
+                              >
+                                {driver.phone}
+                              </button>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-slate-700">
+                            {driver.email ? (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void copyText(driver.email ?? '', `email-${driver.id}`);
+                                }}
+                                className={`transition-colors ${
+                                  copiedCellKey === `email-${driver.id}`
+                                    ? 'text-emerald-600'
+                                    : 'hover:text-slate-900'
+                                }`}
+                                title="Copy email"
+                              >
+                                {driver.email}
+                              </button>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-slate-700">
                             {activeTrip ? (
                               <div>
-                                <p className="font-medium text-slate-900">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void copyText(
+                                      `${activeTrip.van?.name ?? 'Van'} ${activeTrip.van?.licensePlate ?? ''}`.trim(),
+                                      `trip-van-${driver.id}`,
+                                    );
+                                  }}
+                                  className={`font-medium transition-colors ${
+                                    copiedCellKey === `trip-van-${driver.id}`
+                                      ? 'text-emerald-600'
+                                      : 'text-slate-900 hover:text-slate-700'
+                                  }`}
+                                  title="Copy trip vehicle"
+                                >
                                   {activeTrip.van?.name ?? 'Van'}
-                                </p>
+                                </button>
                                 <p className="text-[11px] text-slate-500">
-                                  since {formatDateTime(activeTrip.departureDate)}
+                                  since {formatDateTime(activeTrip.departureDate ?? activeTrip.loadboardFromDate)}
                                 </p>
                               </div>
                             ) : (
-                              '—'
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openStartTripModal(driver.id);
+                                }}
+                                disabled={!driver.isActive || driver.status !== DriverStatus.AVAILABLE || planningVansForTrip.length === 0}
+                                className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                No Active Trip
+                              </button>
                             )}
                           </td>
                           <td className="px-3 py-2 text-right">
@@ -646,11 +896,15 @@ export default function DriversPage() {
                       <button
                         type="button"
                         onClick={openStartTripModal}
-                        disabled={availableVansForTrip.length === 0}
+                        disabled={
+                          planningVansForTrip.length === 0 ||
+                          !selectedDriver.isActive ||
+                          selectedDriver.status !== DriverStatus.AVAILABLE
+                        }
                         className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Play className="h-3.5 w-3.5" />
-                        Start New Trip
+                        Create Trip
                       </button>
                     )}
                   </div>
@@ -672,15 +926,27 @@ export default function DriversPage() {
                           </p>
                         </div>
                         <div>
-                          <p className="text-slate-500">Departure</p>
+                          <p className="text-slate-500">
+                            {selectedActiveTrip.status === TripStatus.PLANNED
+                              ? 'Loadboard From'
+                              : 'Departure'}
+                          </p>
                           <p className="font-semibold text-slate-900">
-                            {formatDateTime(selectedActiveTrip.departureDate)}
+                            {formatDateTime(
+                              selectedActiveTrip.departureDate ?? selectedActiveTrip.loadboardFromDate,
+                            )}
                           </p>
                         </div>
                         <div>
                           <p className="text-slate-500">Start Odometer</p>
                           <p className="font-semibold text-slate-900">
                             {selectedActiveTrip.startOdometerKm ?? '—'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-slate-500">Planned End</p>
+                          <p className="font-semibold text-slate-900">
+                            {formatDateTime(selectedActiveTrip.plannedEndDate)}
                           </p>
                         </div>
                         <div>
@@ -708,14 +974,26 @@ export default function DriversPage() {
                       )}
 
                       <div className="flex gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={openCompleteTripModal}
-                          className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Complete Trip
-                        </button>
+                        {selectedActiveTrip.status === TripStatus.PLANNED && (
+                          <button
+                            type="button"
+                            onClick={() => void handleStartPlannedTrip()}
+                            className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            Start Trip
+                          </button>
+                        )}
+                        {selectedActiveTrip.status === TripStatus.IN_PROGRESS && (
+                          <button
+                            type="button"
+                            onClick={openCompleteTripModal}
+                            className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Complete Trip
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => void handleCancelTrip()}
@@ -762,7 +1040,8 @@ export default function DriversPage() {
                             </span>
                           </div>
                           <p className="mt-1 text-slate-600">
-                            {formatDateTime(trip.departureDate)} → {formatDateTime(trip.returnDate)}
+                            {formatDateTime(trip.departureDate ?? trip.loadboardFromDate)} →{' '}
+                            {formatDateTime(trip.returnDate)}
                           </p>
                           <p className="text-slate-600">
                             {kmDriven !== null ? `${kmDriven} km` : 'KM not available'} · {trip.loads?.length ?? 0} load(s)
@@ -904,16 +1183,15 @@ export default function DriversPage() {
 
               <label className="text-xs text-slate-600">
                 License Valid Until
-                <input
-                  type="date"
+                <DateTimePicker
+                  mode="date"
                   value={driverForm.driverLicenseValidUntil}
-                  onChange={(event) =>
+                  onChange={(value) =>
                     setDriverForm((prev) => ({
                       ...prev,
-                      driverLicenseValidUntil: event.target.value,
+                      driverLicenseValidUntil: value,
                     }))
                   }
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
 
@@ -947,25 +1225,23 @@ export default function DriversPage() {
 
               <label className="text-xs text-slate-600">
                 Date of Birth
-                <input
-                  type="date"
+                <DateTimePicker
+                  mode="date"
                   value={driverForm.dateOfBirth}
-                  onChange={(event) =>
-                    setDriverForm((prev) => ({ ...prev, dateOfBirth: event.target.value }))
+                  onChange={(value) =>
+                    setDriverForm((prev) => ({ ...prev, dateOfBirth: value }))
                   }
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
 
               <label className="text-xs text-slate-600">
                 Hired At
-                <input
-                  type="date"
+                <DateTimePicker
+                  mode="date"
                   value={driverForm.hiredAt}
-                  onChange={(event) =>
-                    setDriverForm((prev) => ({ ...prev, hiredAt: event.target.value }))
+                  onChange={(value) =>
+                    setDriverForm((prev) => ({ ...prev, hiredAt: value }))
                   }
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
 
@@ -990,16 +1266,15 @@ export default function DriversPage() {
               {driverForm.adrCertified && (
                 <label className="text-xs text-slate-600 sm:col-span-2">
                   ADR Valid Until
-                  <input
-                    type="date"
+                  <DateTimePicker
+                    mode="date"
                     value={driverForm.adrValidUntil}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setDriverForm((prev) => ({
                         ...prev,
-                        adrValidUntil: event.target.value,
+                        adrValidUntil: value,
                       }))
                     }
-                    className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                   />
                 </label>
               )}
@@ -1029,91 +1304,42 @@ export default function DriversPage() {
         </div>
       )}
 
-      {startTripModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
-          onClick={closeStartTripModal}
-        >
-          <section
-            className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-900">Start New Trip</h2>
-              <button
-                type="button"
-                onClick={closeStartTripModal}
-                className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50"
-                title="Close"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <label className="block text-xs text-slate-600">
-                Vehicle
-                <select
-                  value={startTripVanId}
-                  onChange={(event) => {
-                    const van = availableVansForTrip.find((row) => row.id === event.target.value);
-                    setStartTripVanId(event.target.value);
-                    setStartTripOdometer(van?.odometerKm ? String(van.odometerKm) : '');
-                  }}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                >
-                  <option value="">Select vehicle</option>
-                  {availableVansForTrip.map((van) => (
-                    <option key={van.id} value={van.id}>
-                      {van.name} ({van.licensePlate})
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block text-xs text-slate-600">
-                Departure
-                <input
-                  type="datetime-local"
-                  value={startTripDeparture}
-                  onChange={(event) => setStartTripDeparture(event.target.value)}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
-
-              <label className="block text-xs text-slate-600">
-                Start Odometer (km)
-                <input
-                  type="number"
-                  min={0}
-                  value={startTripOdometer}
-                  onChange={(event) => setStartTripOdometer(event.target.value)}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
-
-              <label className="block text-xs text-slate-600">
-                Notes
-                <textarea
-                  value={startTripNotes}
-                  onChange={(event) => setStartTripNotes(event.target.value)}
-                  className="mt-1 min-h-20 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
-
-              <button
-                type="button"
-                onClick={() => void handleStartTrip()}
-                disabled={isSubmitting}
-                className="inline-flex w-full items-center justify-center gap-2 rounded bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Play className="h-4 w-4" />
-                Start Trip
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+      <CreateTripModal
+        isOpen={startTripModalOpen}
+        isSubmitting={isSubmitting}
+        error={error}
+        driverOptions={drivers
+          .filter(
+            (driver) =>
+              driver.isActive &&
+              driver.status === DriverStatus.AVAILABLE &&
+              !activeTripByDriver.has(driver.id),
+          )
+          .map((driver) => ({
+            id: driver.id,
+            name: `${driver.firstName} ${driver.lastName}`,
+            email: driver.email,
+            phone: driver.phone,
+          }))}
+        vanOptions={planningVansForTrip.map((van) => ({
+          id: van.id,
+          name: van.name,
+          licensePlate: van.licensePlate,
+          status: van.status,
+          vehicleId: van.vehicleId,
+          driverName: van.assignedDriver
+            ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+            : null,
+        }))}
+        driverId={startTripDriverId}
+        vanId={startTripVanId}
+        loadboardFrom={startTripDeparture}
+        onDriverChange={setStartTripDriverId}
+        onVanChange={setStartTripVanId}
+        onLoadboardFromChange={setStartTripDeparture}
+        onClose={closeStartTripModal}
+        onSubmit={() => void handleStartTrip()}
+      />
 
       {completeTripModalOpen && selectedActiveTrip && (
         <div
@@ -1139,11 +1365,10 @@ export default function DriversPage() {
             <div className="space-y-3">
               <label className="block text-xs text-slate-600">
                 Return Date & Time
-                <input
-                  type="datetime-local"
+                <DateTimePicker
+                  mode="datetime"
                   value={completeTripDate}
-                  onChange={(event) => setCompleteTripDate(event.target.value)}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                  onChange={setCompleteTripDate}
                 />
               </label>
 

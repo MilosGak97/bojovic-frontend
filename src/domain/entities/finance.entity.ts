@@ -46,6 +46,16 @@ export interface DriverPayRecord extends BaseEntity {
   driver?: Driver;
 }
 
+export interface CustomIncome extends BaseEntity {
+  amount: number;
+  currency: Currency;
+  incomeDate: string;
+  description: string;
+  category: string | null;
+  referenceNumber: string | null;
+  notes: string | null;
+}
+
 export interface PeriodSummary {
   totalRevenue: number;
   totalExpenses: number;
@@ -68,6 +78,7 @@ export interface CashFlow {
   expectedIncoming: number;
   expectedIncomingInvoitix: number;
   expectedIncomingValuta: number;
+  customIncomeTotal: number;
   totalExpenses: number;
   totalSalaries: number;
   netCashFlow: number;

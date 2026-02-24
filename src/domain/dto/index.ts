@@ -2,7 +2,12 @@ export type { CreateBrokerCompanyDto, UpdateBrokerCompanyDto, CreateBrokerContac
 export type { CreateLoadDto, UpdateLoadDto, CreateLoadStopDto, CreateLoadFreightDto, CreateLoadPalletDto } from './load.dto';
 export type { CreateVanDto, UpdateVanDto } from './van.dto';
 export type { CreateDriverDto, UpdateDriverDto } from './driver.dto';
-export type { CreateTripDto, UpdateTripDto, CompleteTripDto } from './trip.dto';
+export type {
+  CreateTripDto,
+  UpdateTripDto,
+  CompleteTripDto,
+  StartTripDto,
+} from './trip.dto';
 export type { CreateRoutePlanDto, UpdateRoutePlanDto, CreateRouteStopDto } from './route.dto';
 export type { CreateDispatchAssignmentDto, UpdateDispatchAssignmentDto } from './dispatch.dto';
 export type { CreateDocumentDto, UpdateDocumentDto } from './document.dto';
@@ -16,4 +21,6 @@ export type {
   UpdateExpenseDto,
   CreateDriverPayRecordDto,
   UpdateDriverPayRecordDto,
+  CreateCustomIncomeDto,
+  UpdateCustomIncomeDto,
 } from './finance.dto';

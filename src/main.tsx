@@ -5,6 +5,7 @@ import App from './app/App.tsx';
 import FleetMonitorPage from './app/FleetMonitorPage.tsx';
 import FinancePage from './app/FinancePage.tsx';
 import DriversPage from './app/DriversPage.tsx';
+import TripsPage from './app/TripsPage.tsx';
 import HomePage from './app/HomePage.tsx';
 import LoadDetailPage from './app/LoadDetailPage.tsx';
 import LoadBoardPage from './app/LoadBoardPage.tsx';
@@ -21,6 +22,7 @@ createRoot(document.getElementById('root')!).render(
       <Route path="/loads/:loadId" element={<LoadDetailPage />} />
       <Route path="/fleet-monitor" element={<FleetMonitorPage />} />
       <Route path="/drivers" element={<DriversPage />} />
+      <Route path="/trips" element={<TripsPage />} />
       <Route path="/finance" element={<FinancePage />} />
       {dashboardModules
         .filter((module) => !module.ready)

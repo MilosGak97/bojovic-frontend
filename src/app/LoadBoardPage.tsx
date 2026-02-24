@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router';
-import { loadApi, vanApi } from '../api';
-import type { Load, Van } from '../domain/entities';
+import { loadApi, tripApi } from '../api';
+import type { Load, Trip } from '../domain/entities';
 import { LoadStatus } from '../domain/enums';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { UploadModal } from './components/UploadModal';
@@ -108,19 +108,19 @@ export default function LoadBoardPage() {
   const [isCreateLoadOpen, setIsCreateLoadOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [plannerVans, setPlannerVans] = useState<Van[]>([]);
-  const [isLoadingPlannerVans, setIsLoadingPlannerVans] = useState(false);
-  const [plannerVansError, setPlannerVansError] = useState<string | null>(null);
+  const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
+  const [isLoadingTrips, setIsLoadingTrips] = useState(false);
+  const [tripsError, setTripsError] = useState<string | null>(null);
 
   const [selectedLoadIds, setSelectedLoadIds] = useState<string[]>([]);
   const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
-  const [bulkPlannerVanId, setBulkPlannerVanId] = useState('');
-  const [bulkVehicleSearch, setBulkVehicleSearch] = useState('');
+  const [bulkTripId, setBulkTripId] = useState('');
+  const [bulkTripSearch, setBulkTripSearch] = useState('');
   const [isBulkAssigning, setIsBulkAssigning] = useState(false);
   const [bulkAssignError, setBulkAssignError] = useState<string | null>(null);
   const [singlePlannerLoad, setSinglePlannerLoad] = useState<Load | null>(null);
-  const [singlePlannerVanId, setSinglePlannerVanId] = useState('');
-  const [singleVehicleSearch, setSingleVehicleSearch] = useState('');
+  const [singleTripId, setSingleTripId] = useState('');
+  const [singleTripSearch, setSingleTripSearch] = useState('');
   const [isSingleAssigning, setIsSingleAssigning] = useState(false);
   const [singleAssignError, setSingleAssignError] = useState<string | null>(null);
 
@@ -158,20 +158,20 @@ export default function LoadBoardPage() {
     }
   }, []);
 
-  const fetchPlannerVans = useCallback(async () => {
-    setIsLoadingPlannerVans(true);
-    setPlannerVansError(null);
+  const fetchActiveTrips = useCallback(async () => {
+    setIsLoadingTrips(true);
+    setTripsError(null);
     try {
-      const response = await vanApi.getAll();
-      setPlannerVans(response);
-      setBulkPlannerVanId((current) => current || response[0]?.id || '');
+      const response = await tripApi.getActive();
+      setActiveTrips(response);
+      setBulkTripId((current) => current || response[0]?.id || '');
     } catch (requestError) {
-      setPlannerVans([]);
-      setPlannerVansError(
-        requestError instanceof Error ? requestError.message : 'Failed to load vehicles.',
+      setActiveTrips([]);
+      setTripsError(
+        requestError instanceof Error ? requestError.message : 'Failed to load trips.',
       );
     } finally {
-      setIsLoadingPlannerVans(false);
+      setIsLoadingTrips(false);
     }
   }, []);
 
@@ -180,8 +180,8 @@ export default function LoadBoardPage() {
   }, [fetchLoads, statusFilter]);
 
   useEffect(() => {
-    void fetchPlannerVans();
-  }, [fetchPlannerVans]);
+    void fetchActiveTrips();
+  }, [fetchActiveTrips]);
 
   useEffect(() => {
     setSelectedLoadIds((prev) => prev.filter((id) => loads.some((load) => load.id === id)));
@@ -196,26 +196,38 @@ export default function LoadBoardPage() {
     }
   }, [focusedLoadId, loads]);
 
-  const plannerVansById = useMemo(
-    () => new Map(plannerVans.map((van) => [van.id, van])),
-    [plannerVans],
+  const activeTripsById = useMemo(
+    () => new Map(activeTrips.map((trip) => [trip.id, trip])),
+    [activeTrips],
   );
 
-  const formatPlannerVehicle = useCallback(
+  const formatPlannerTrip = useCallback(
     (load: Load): string => {
-      if (load.plannerVan) {
-        return `${load.plannerVan.name} • ${load.plannerVan.licensePlate}`;
+      if (load.trip) {
+        const driverName = load.trip.driver
+          ? `${load.trip.driver.firstName} ${load.trip.driver.lastName}`.trim()
+          : '';
+        const vanInfo = load.trip.van
+          ? `${load.trip.van.name} (${load.trip.van.licensePlate})`
+          : '';
+        return [driverName, vanInfo].filter(Boolean).join(' — ') || 'Assigned';
       }
-      if (load.plannerVanId) {
-        const van = plannerVansById.get(load.plannerVanId);
-        if (van) {
-          return `${van.name} • ${van.licensePlate}`;
+      if (load.tripId) {
+        const trip = activeTripsById.get(load.tripId);
+        if (trip) {
+          const driverName = trip.driver
+            ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+            : '';
+          const vanInfo = trip.van
+            ? `${trip.van.name} (${trip.van.licensePlate})`
+            : '';
+          return [driverName, vanInfo].filter(Boolean).join(' — ') || 'Assigned';
         }
         return 'Assigned';
       }
       return 'Not in planner';
     },
-    [plannerVansById],
+    [activeTripsById],
   );
 
   const summary = useMemo(
@@ -223,7 +235,7 @@ export default function LoadBoardPage() {
       total: loads.length,
       active: loads.filter((load) => !load.isInactive).length,
       inactive: loads.filter((load) => load.isInactive).length,
-      inPlanner: loads.filter((load) => Boolean(load.plannerVanId)).length,
+      inPlanner: loads.filter((load) => Boolean(load.tripId)).length,
     }),
     [loads],
   );
@@ -249,25 +261,25 @@ export default function LoadBoardPage() {
 
   const openBulkAssign = () => {
     setBulkAssignError(null);
-    setBulkVehicleSearch('');
-    if (!bulkPlannerVanId && plannerVans.length > 0) {
-      setBulkPlannerVanId(plannerVans[0].id);
+    setBulkTripSearch('');
+    if (!bulkTripId && activeTrips.length > 0) {
+      setBulkTripId(activeTrips[0].id);
     }
     setIsBulkAssignOpen(true);
   };
 
   const openSingleAssign = (load: Load) => {
     setSingleAssignError(null);
-    setSingleVehicleSearch('');
+    setSingleTripSearch('');
     setSinglePlannerLoad(load);
-    setSinglePlannerVanId(load.plannerVanId ?? plannerVans[0]?.id ?? '');
+    setSingleTripId(load.tripId ?? activeTrips[0]?.id ?? '');
   };
 
   const closeSingleAssign = () => {
     if (isSingleAssigning) return;
     setSinglePlannerLoad(null);
-    setSinglePlannerVanId('');
-    setSingleVehicleSearch('');
+    setSingleTripId('');
+    setSingleTripSearch('');
     setSingleAssignError(null);
   };
 
@@ -283,8 +295,8 @@ export default function LoadBoardPage() {
       setBulkAssignError('Select at least one load.');
       return;
     }
-    if (!bulkPlannerVanId) {
-      setBulkAssignError('Select a vehicle.');
+    if (!bulkTripId) {
+      setBulkAssignError('Select a trip.');
       return;
     }
 
@@ -294,7 +306,7 @@ export default function LoadBoardPage() {
       await Promise.all(
         selectedLoadIds.map((loadId) =>
           loadApi.update(loadId, {
-            plannerVanId: bulkPlannerVanId,
+            tripId: bulkTripId,
           }),
         ),
       );
@@ -313,8 +325,8 @@ export default function LoadBoardPage() {
 
   const handleSingleAddToPlanner = async () => {
     if (!singlePlannerLoad) return;
-    if (!singlePlannerVanId) {
-      setSingleAssignError('Select a vehicle.');
+    if (!singleTripId) {
+      setSingleAssignError('Select a trip.');
       return;
     }
 
@@ -323,24 +335,24 @@ export default function LoadBoardPage() {
 
     try {
       await loadApi.update(singlePlannerLoad.id, {
-        plannerVanId: singlePlannerVanId,
+        tripId: singleTripId,
       });
 
-      const selectedVan = plannerVansById.get(singlePlannerVanId) ?? null;
+      const selectedTripObj = activeTripsById.get(singleTripId) ?? null;
       setLoads((prev) =>
         prev.map((load) =>
           load.id === singlePlannerLoad.id
             ? {
                 ...load,
-                plannerVanId: singlePlannerVanId,
-                plannerVan: selectedVan,
+                tripId: singleTripId,
+                trip: selectedTripObj,
               }
             : load,
         ),
       );
 
       setSinglePlannerLoad(null);
-      setSinglePlannerVanId('');
+      setSingleTripId('');
     } catch (requestError) {
       setSingleAssignError(
         requestError instanceof Error ? requestError.message : 'Failed to add load to planner.',
@@ -350,31 +362,26 @@ export default function LoadBoardPage() {
     }
   };
 
-  const filteredBulkPlannerVans = useMemo(() => {
-    const term = bulkVehicleSearch.trim().toLowerCase();
-    if (!term) return plannerVans;
-    return plannerVans.filter((van) => {
-      const driverName = van.assignedDriver
-        ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
-        : '';
-      return `${van.name} ${van.vehicleId ?? ''} ${van.licensePlate} ${driverName}`
-        .toLowerCase()
-        .includes(term);
-    });
-  }, [bulkVehicleSearch, plannerVans]);
+  const getTripSearchLabel = (trip: Trip): string => {
+    const driverName = trip.driver
+      ? `${trip.driver.firstName} ${trip.driver.lastName}`
+      : '';
+    const vanName = trip.van?.name ?? '';
+    const vanPlate = trip.van?.licensePlate ?? '';
+    return `${driverName} ${vanName} ${vanPlate}`.toLowerCase();
+  };
 
-  const filteredSinglePlannerVans = useMemo(() => {
-    const term = singleVehicleSearch.trim().toLowerCase();
-    if (!term) return plannerVans;
-    return plannerVans.filter((van) => {
-      const driverName = van.assignedDriver
-        ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
-        : '';
-      return `${van.name} ${van.vehicleId ?? ''} ${van.licensePlate} ${driverName}`
-        .toLowerCase()
-        .includes(term);
-    });
-  }, [plannerVans, singleVehicleSearch]);
+  const filteredBulkTrips = useMemo(() => {
+    const term = bulkTripSearch.trim().toLowerCase();
+    if (!term) return activeTrips;
+    return activeTrips.filter((trip) => getTripSearchLabel(trip).includes(term));
+  }, [bulkTripSearch, activeTrips]);
+
+  const filteredSingleTrips = useMemo(() => {
+    const term = singleTripSearch.trim().toLowerCase();
+    if (!term) return activeTrips;
+    return activeTrips.filter((trip) => getTripSearchLabel(trip).includes(term));
+  }, [activeTrips, singleTripSearch]);
 
   return (
     <main className="min-h-screen bg-slate-100">
@@ -408,7 +415,7 @@ export default function LoadBoardPage() {
               <button
                 type="button"
                 onClick={openBulkAssign}
-                disabled={selectedLoadIds.length === 0 || plannerVans.length === 0}
+                disabled={selectedLoadIds.length === 0 || activeTrips.length === 0}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {`Add Selected To Planner (${selectedLoadIds.length})`}
@@ -555,8 +562,8 @@ export default function LoadBoardPage() {
                       </td>
                       <td className="px-3 py-2 text-slate-700">{formatBoardSource(load)}</td>
                       <td className="px-3 py-2 text-slate-700">
-                        {load.plannerVanId ? (
-                          formatPlannerVehicle(load)
+                        {load.tripId ? (
+                          formatPlannerTrip(load)
                         ) : (
                           <button
                             type="button"
@@ -613,36 +620,41 @@ export default function LoadBoardPage() {
             </div>
 
             <label className="mx-auto mt-3 block w-full text-xs text-slate-600 md:w-[616px]">
-              Search Vehicle
+              Search Trip
               <input
                 type="text"
-                value={bulkVehicleSearch}
-                onChange={(event) => setBulkVehicleSearch(event.target.value)}
-                placeholder="Search by name, vehicle ID, plate, or assigned driver..."
-                disabled={isLoadingPlannerVans || plannerVans.length === 0 || isBulkAssigning}
+                value={bulkTripSearch}
+                onChange={(event) => setBulkTripSearch(event.target.value)}
+                placeholder="Search by driver name, vehicle name, or plate..."
+                disabled={isLoadingTrips || activeTrips.length === 0 || isBulkAssigning}
                 className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100"
               />
             </label>
 
             <div className="mx-auto mt-2 grid max-h-72 w-full grid-cols-1 gap-2 overflow-y-auto md:w-[616px] md:grid-cols-[repeat(3,200px)] md:justify-center">
-              {isLoadingPlannerVans && (
+              {isLoadingTrips && (
                 <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
-                  Loading vehicles...
+                  Loading trips...
                 </p>
               )}
-              {!isLoadingPlannerVans && filteredBulkPlannerVans.length === 0 && (
+              {!isLoadingTrips && filteredBulkTrips.length === 0 && (
                 <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
-                  No vehicles match this search.
+                  No trips match this search.
                 </p>
               )}
-              {!isLoadingPlannerVans &&
-                filteredBulkPlannerVans.map((van) => {
-                  const isSelected = bulkPlannerVanId === van.id;
+              {!isLoadingTrips &&
+                filteredBulkTrips.map((trip) => {
+                  const isSelected = bulkTripId === trip.id;
+                  const driverName = trip.driver
+                    ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+                    : 'No driver';
+                  const vanName = trip.van?.name ?? 'No vehicle';
+                  const vanPlate = trip.van?.licensePlate ?? '';
                   return (
                     <button
-                      key={van.id}
+                      key={trip.id}
                       type="button"
-                      onClick={() => setBulkPlannerVanId(van.id)}
+                      onClick={() => setBulkTripId(trip.id)}
                       disabled={isBulkAssigning}
                       className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
                         isSelected
@@ -650,22 +662,19 @@ export default function LoadBoardPage() {
                           : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
-                      <p className="text-sm font-semibold text-slate-900">{van.name}</p>
-                      <p className="text-xs text-slate-500">{van.vehicleId ?? 'No vehicle ID'}</p>
-                      <p className="text-xs text-slate-600">{van.licensePlate}</p>
+                      <p className="text-sm font-semibold text-slate-900">{driverName}</p>
+                      <p className="text-xs text-slate-600">{vanName} {vanPlate && `(${vanPlate})`}</p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        Driver:{' '}
-                        {van.assignedDriver
-                          ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
-                          : 'Unassigned'}
+                        {new Date(trip.loadboardFromDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}
+                        {trip.plannedEndDate && ` – ${new Date(trip.plannedEndDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}`}
                       </p>
                     </button>
                   );
                 })}
             </div>
-            {plannerVansError && (
+            {tripsError && (
               <span className="mx-auto mt-1 block w-full text-[11px] text-rose-600 md:w-[616px]">
-                {plannerVansError}
+                {tripsError}
               </span>
             )}
 
@@ -687,7 +696,7 @@ export default function LoadBoardPage() {
               <button
                 type="button"
                 onClick={() => void handleBulkAddToPlanner()}
-                disabled={isBulkAssigning || !bulkPlannerVanId || selectedLoadIds.length === 0}
+                disabled={isBulkAssigning || !bulkTripId || selectedLoadIds.length === 0}
                 className="w-full rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 {isBulkAssigning ? 'Assigning...' : 'Add To Planner'}
@@ -714,36 +723,41 @@ export default function LoadBoardPage() {
             </div>
 
             <label className="mx-auto mt-3 block w-full text-xs text-slate-600 md:w-[616px]">
-              Search Vehicle
+              Search Trip
               <input
                 type="text"
-                value={singleVehicleSearch}
-                onChange={(event) => setSingleVehicleSearch(event.target.value)}
-                placeholder="Search by name, vehicle ID, plate, or assigned driver..."
-                disabled={isLoadingPlannerVans || plannerVans.length === 0 || isSingleAssigning}
+                value={singleTripSearch}
+                onChange={(event) => setSingleTripSearch(event.target.value)}
+                placeholder="Search by driver name, vehicle name, or plate..."
+                disabled={isLoadingTrips || activeTrips.length === 0 || isSingleAssigning}
                 className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100"
               />
             </label>
 
             <div className="mx-auto mt-2 grid max-h-72 w-full grid-cols-1 gap-2 overflow-y-auto md:w-[616px] md:grid-cols-[repeat(3,200px)] md:justify-center">
-              {isLoadingPlannerVans && (
+              {isLoadingTrips && (
                 <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
-                  Loading vehicles...
+                  Loading trips...
                 </p>
               )}
-              {!isLoadingPlannerVans && filteredSinglePlannerVans.length === 0 && (
+              {!isLoadingTrips && filteredSingleTrips.length === 0 && (
                 <p className="w-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
-                  No vehicles match this search.
+                  No trips match this search.
                 </p>
               )}
-              {!isLoadingPlannerVans &&
-                filteredSinglePlannerVans.map((van) => {
-                  const isSelected = singlePlannerVanId === van.id;
+              {!isLoadingTrips &&
+                filteredSingleTrips.map((trip) => {
+                  const isSelected = singleTripId === trip.id;
+                  const driverName = trip.driver
+                    ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+                    : 'No driver';
+                  const vanName = trip.van?.name ?? 'No vehicle';
+                  const vanPlate = trip.van?.licensePlate ?? '';
                   return (
                     <button
-                      key={van.id}
+                      key={trip.id}
                       type="button"
-                      onClick={() => setSinglePlannerVanId(van.id)}
+                      onClick={() => setSingleTripId(trip.id)}
                       disabled={isSingleAssigning}
                       className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
                         isSelected
@@ -751,22 +765,19 @@ export default function LoadBoardPage() {
                           : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
-                      <p className="text-sm font-semibold text-slate-900">{van.name}</p>
-                      <p className="text-xs text-slate-500">{van.vehicleId ?? 'No vehicle ID'}</p>
-                      <p className="text-xs text-slate-600">{van.licensePlate}</p>
+                      <p className="text-sm font-semibold text-slate-900">{driverName}</p>
+                      <p className="text-xs text-slate-600">{vanName} {vanPlate && `(${vanPlate})`}</p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        Driver:{' '}
-                        {van.assignedDriver
-                          ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
-                          : 'Unassigned'}
+                        {new Date(trip.loadboardFromDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}
+                        {trip.plannedEndDate && ` – ${new Date(trip.plannedEndDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}`}
                       </p>
                     </button>
                   );
                 })}
             </div>
-            {plannerVansError && (
+            {tripsError && (
               <span className="mx-auto mt-1 block w-full text-[11px] text-rose-600 md:w-[616px]">
-                {plannerVansError}
+                {tripsError}
               </span>
             )}
 
@@ -788,7 +799,7 @@ export default function LoadBoardPage() {
               <button
                 type="button"
                 onClick={() => void handleSingleAddToPlanner()}
-                disabled={isSingleAssigning || !singlePlannerVanId}
+                disabled={isSingleAssigning || !singleTripId}
                 className="w-full rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 {isSingleAssigning ? 'Assigning...' : 'Add To Planner'}

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, RefreshCw } from 'lucide-react';
-import { driverPayApi, expenseApi, loadApi, paymentApi } from '../api';
-import type { DriverPayRecord, Expense, Load, PaymentRecord } from '../domain/entities';
+import { Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { customIncomeApi, driverPayApi, expenseApi, loadApi, paymentApi } from '../api';
+import type { CustomIncome, DriverPayRecord, Expense, Load, PaymentRecord } from '../domain/entities';
 import { Currency, ExpenseCategory, ExpenseType, LoadStatus, PaymentStatus } from '../domain/enums';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
+import { DateTimePicker } from './components/DateTimePicker';
 
 type LedgerEventKind = 'INCOME' | 'FIXED' | 'VARIABLE';
 
@@ -13,6 +14,7 @@ type LedgerEvent = {
   kind: LedgerEventKind;
   label: string;
   amount: number;
+  source?: 'PAYMENT' | 'CUSTOM';
 };
 
 type VariableCostRow = {
@@ -166,11 +168,13 @@ export default function FinancePage() {
   const [loadPaymentFilter, setLoadPaymentFilter] = useState<LoadPaymentFilter>('COMPLETED');
   const [from, setFrom] = useState(getDefaultFromDate);
   const [to, setTo] = useState(getDefaultToDate);
+  const [includeUpcomingIncome, setIncludeUpcomingIncome] = useState(true);
   const [currentBalanceInput, setCurrentBalanceInput] = useState('0');
 
   const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
   const [allPayments, setAllPayments] = useState<PaymentRecord[]>([]);
   const [allDriverPayRecords, setAllDriverPayRecords] = useState<DriverPayRecord[]>([]);
+  const [allCustomIncomes, setAllCustomIncomes] = useState<CustomIncome[]>([]);
   const [allLoads, setAllLoads] = useState<Load[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
@@ -196,13 +200,13 @@ export default function FinancePage() {
     vendor: '',
   });
 
-  const [incomeForm, setIncomeForm] = useState({
-    loadId: '',
+  const [customIncomeForm, setCustomIncomeForm] = useState({
+    description: '',
     amount: '',
-    invoiceDate: getDefaultFromDate(),
-    incomingDate: getDefaultFromDate(),
-    invoiceNumber: '',
-    note: '',
+    incomeDate: getDefaultFromDate(),
+    category: '',
+    referenceNumber: '',
+    notes: '',
   });
 
   const loadData = useCallback(async () => {
@@ -210,22 +214,25 @@ export default function FinancePage() {
     setError(null);
 
     try {
-      const [expenses, payments, driverPay, loads] = await Promise.all([
+      const [expenses, payments, driverPay, customIncomes, loads] = await Promise.all([
         expenseApi.getAll(),
         paymentApi.getAll(),
         driverPayApi.getAll(),
+        customIncomeApi.getAll(),
         fetchAllLoads(),
       ]);
 
       setAllExpenses(expenses);
       setAllPayments(payments);
       setAllDriverPayRecords(driverPay);
+      setAllCustomIncomes(customIncomes);
       setAllLoads(loads);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to load finance data.');
       setAllExpenses([]);
       setAllPayments([]);
       setAllDriverPayRecords([]);
+      setAllCustomIncomes([]);
       setAllLoads([]);
     } finally {
       setIsLoading(false);
@@ -317,6 +324,11 @@ export default function FinancePage() {
     [allDriverPayRecords, from, to],
   );
 
+  const customIncomesInRange = useMemo(
+    () => allCustomIncomes.filter((income) => isDateInRange(income.incomeDate, from, to)),
+    [allCustomIncomes, from, to],
+  );
+
   const fixedExpenses = useMemo(
     () => expensesInRange.filter((expense) => expense.expenseType === ExpenseType.FIXED || expense.isRecurring),
     [expensesInRange],
@@ -330,6 +342,31 @@ export default function FinancePage() {
   const upcomingIncomes = useMemo(
     () => [...paymentsInRange].sort((a, b) => resolveIncomeDate(a).localeCompare(resolveIncomeDate(b))),
     [paymentsInRange],
+  );
+
+  const paymentIncomeEvents = useMemo(
+    () =>
+      upcomingIncomes.filter(
+        (payment) => includeUpcomingIncome || payment.status === PaymentStatus.PAID,
+      ),
+    [upcomingIncomes, includeUpcomingIncome],
+  );
+
+  const paymentIncomeTotal = useMemo(
+    () =>
+      round2(
+        paymentIncomeEvents.reduce(
+          (sum, payment) => sum + toNumber(payment.totalWithVat ?? payment.amount),
+          0,
+        ),
+      ),
+    [paymentIncomeEvents],
+  );
+
+  const customIncomeTotal = useMemo(
+    () =>
+      round2(customIncomesInRange.reduce((sum, income) => sum + toNumber(income.amount), 0)),
+    [customIncomesInRange],
   );
 
   const variableCostRows = useMemo<VariableCostRow[]>(() => {
@@ -359,7 +396,7 @@ export default function FinancePage() {
   }, [variableExpenses, driverPayInRange]);
 
   const ledgerEvents = useMemo<LedgerEvent[]>(() => {
-    const incomeEvents: LedgerEvent[] = upcomingIncomes.map((payment) => {
+    const incomeEvents: LedgerEvent[] = paymentIncomeEvents.map((payment) => {
       const linkedLoad = payment.load ?? loadsById.get(payment.loadId);
       const loadRef = linkedLoad?.referenceNumber ?? payment.loadId;
       return {
@@ -368,8 +405,18 @@ export default function FinancePage() {
         kind: 'INCOME',
         label: `Income ${loadRef}`,
         amount: toNumber(payment.totalWithVat ?? payment.amount),
+        source: 'PAYMENT',
       };
     });
+
+    const customIncomeEvents: LedgerEvent[] = customIncomesInRange.map((income) => ({
+      id: `custom-income-${income.id}`,
+      date: toDateOnly(income.incomeDate) || getDefaultFromDate(),
+      kind: 'INCOME',
+      label: income.description,
+      amount: toNumber(income.amount),
+      source: 'CUSTOM',
+    }));
 
     const fixedEvents: LedgerEvent[] = fixedExpenses.map((expense) => ({
       id: `fixed-${expense.id}`,
@@ -387,10 +434,20 @@ export default function FinancePage() {
       amount: toNumber(row.amount),
     }));
 
-    return [...incomeEvents, ...fixedEvents, ...variableEvents].sort((a, b) =>
+    return [...incomeEvents, ...customIncomeEvents, ...fixedEvents, ...variableEvents].sort((a, b) =>
       a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date),
     );
-  }, [upcomingIncomes, fixedExpenses, variableCostRows, loadsById]);
+  }, [paymentIncomeEvents, customIncomesInRange, fixedExpenses, variableCostRows, loadsById]);
+
+  const upcomingPaymentOnlyTotal = useMemo(
+    () =>
+      round2(
+        upcomingIncomes
+          .filter((payment) => payment.status !== PaymentStatus.PAID)
+          .reduce((sum, payment) => sum + toNumber(payment.totalWithVat ?? payment.amount), 0),
+      ),
+    [upcomingIncomes],
+  );
 
   const openingBalance = toNumber(currentBalanceInput);
 
@@ -491,20 +548,18 @@ export default function FinancePage() {
     }
   };
 
-  const handleAddUpcomingIncome = async () => {
-    const amount = toNumber(incomeForm.amount);
-    if (!incomeForm.loadId) {
-      setError('Select a load for upcoming income.');
+  const handleAddCustomIncome = async () => {
+    const amount = toNumber(customIncomeForm.amount);
+    if (!customIncomeForm.description.trim()) {
+      setError('Custom income description is required.');
       return;
     }
     if (amount <= 0) {
-      setError('Income amount must be greater than 0.');
+      setError('Custom income amount must be greater than 0.');
       return;
     }
-
-    const selectedLoad = loadsById.get(incomeForm.loadId);
-    if (!selectedLoad?.brokerId) {
-      setError('Selected load has no broker assigned.');
+    if (!customIncomeForm.incomeDate) {
+      setError('Custom income date is required.');
       return;
     }
 
@@ -512,27 +567,50 @@ export default function FinancePage() {
     setError(null);
 
     try {
-      await paymentApi.create({
-        loadId: selectedLoad.id,
-        brokerId: selectedLoad.brokerId,
-        status: PaymentStatus.INVOICED,
+      await customIncomeApi.create({
         amount,
         currency: Currency.EUR,
-        ...(incomeForm.invoiceNumber.trim() ? { invoiceNumber: incomeForm.invoiceNumber.trim() } : {}),
-        issueDate: incomeForm.invoiceDate,
-        dueDate: incomeForm.incomingDate,
-        ...(incomeForm.note.trim() ? { notes: incomeForm.note.trim() } : {}),
+        incomeDate: customIncomeForm.incomeDate,
+        description: customIncomeForm.description.trim(),
+        ...(customIncomeForm.category.trim()
+          ? { category: customIncomeForm.category.trim() }
+          : {}),
+        ...(customIncomeForm.referenceNumber.trim()
+          ? { referenceNumber: customIncomeForm.referenceNumber.trim() }
+          : {}),
+        ...(customIncomeForm.notes.trim()
+          ? { notes: customIncomeForm.notes.trim() }
+          : {}),
       });
 
-      setIncomeForm((prev) => ({
+      setCustomIncomeForm((prev) => ({
         ...prev,
+        description: '',
         amount: '',
-        invoiceNumber: '',
-        note: '',
+        category: '',
+        referenceNumber: '',
+        notes: '',
       }));
       await loadData();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to add upcoming income.');
+      setError(requestError instanceof Error ? requestError.message : 'Failed to add custom income.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteCustomIncome = async (id: string) => {
+    const confirmed = window.confirm('Delete this custom income row?');
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      await customIncomeApi.delete(id);
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to delete custom income.');
     } finally {
       setIsSubmitting(false);
     }
@@ -628,21 +706,11 @@ export default function FinancePage() {
             <div className="flex flex-wrap items-end gap-2">
               <label className="text-xs text-slate-600">
                 From
-                <input
-                  type="date"
-                  value={from}
-                  onChange={(event) => setFrom(event.target.value)}
-                  className="mt-1 block rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900"
-                />
+                <DateTimePicker mode="date" value={from} onChange={setFrom} triggerClassName="mt-1" />
               </label>
               <label className="text-xs text-slate-600">
                 To
-                <input
-                  type="date"
-                  value={to}
-                  onChange={(event) => setTo(event.target.value)}
-                  className="mt-1 block rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900"
-                />
+                <DateTimePicker mode="date" value={to} onChange={setTo} triggerClassName="mt-1" />
               </label>
               <label className="text-xs text-slate-600">
                 Current Balance
@@ -666,8 +734,14 @@ export default function FinancePage() {
             </div>
           </div>
 
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-800">
+              Current Balance: {formatMoney(openingBalance)}
+            </span>
+          </div>
+
           <p className="mt-3 text-xs text-slate-500">
-            Range totals: income {formatMoney(simulation.totalIncome)} • outgoing {formatMoney(simulation.totalOut)} • projected balance {formatMoney(simulation.projectedBalance)}
+            Current Balance: {formatMoney(openingBalance)} | Range: income {formatMoney(simulation.totalIncome)} (payments {formatMoney(paymentIncomeTotal)} + custom {formatMoney(customIncomeTotal)}) • outgoing {formatMoney(simulation.totalOut)} • projected {formatMoney(simulation.projectedBalance)} • upcoming pending {formatMoney(upcomingPaymentOnlyTotal)}
           </p>
 
           {error && (
@@ -720,11 +794,11 @@ export default function FinancePage() {
               className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
             />
 
-            <input
-              type="date"
+            <DateTimePicker
+              mode="date"
               value={fixedForm.dueDate}
-              onChange={(event) => setFixedForm((prev) => ({ ...prev, dueDate: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              onChange={(value) => setFixedForm((prev) => ({ ...prev, dueDate: value }))}
+              triggerClassName="mt-0"
             />
 
             <input
@@ -808,83 +882,9 @@ export default function FinancePage() {
 
         <section className="order-1 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
           <h2 className="text-sm font-semibold text-slate-900">1. Upcoming Income</h2>
-
-          <div className="mt-3 grid gap-2 md:grid-cols-6">
-            <select
-              value={incomeForm.loadId}
-              onChange={(event) => {
-                const loadId = event.target.value;
-                const load = loadsById.get(loadId);
-                const suggestedPrice = toNumber(load?.agreedPrice ?? load?.publishedPrice);
-                const suggestedDate = toDateOnly(load?.deliveryDateFrom) || incomeForm.incomingDate;
-
-                setIncomeForm((prev) => ({
-                  ...prev,
-                  loadId,
-                  amount: prev.amount || (suggestedPrice > 0 ? String(suggestedPrice) : ''),
-                  incomingDate: prev.incomingDate || suggestedDate,
-                }));
-              }}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            >
-              <option value="">Select load</option>
-              {allLoads.map((load) => (
-                <option key={load.id} value={load.id}>
-                  {load.referenceNumber} • {load.pickupCity} → {load.deliveryCity}
-                </option>
-              ))}
-            </select>
-
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="Income amount"
-              value={incomeForm.amount}
-              onChange={(event) => setIncomeForm((prev) => ({ ...prev, amount: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <input
-              type="date"
-              value={incomeForm.invoiceDate}
-              onChange={(event) => setIncomeForm((prev) => ({ ...prev, invoiceDate: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <input
-              type="date"
-              value={incomeForm.incomingDate}
-              onChange={(event) => setIncomeForm((prev) => ({ ...prev, incomingDate: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <input
-              type="text"
-              placeholder="Invoice number"
-              value={incomeForm.invoiceNumber}
-              onChange={(event) => setIncomeForm((prev) => ({ ...prev, invoiceNumber: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <button
-              type="button"
-              onClick={() => void handleAddUpcomingIncome()}
-              disabled={isSubmitting}
-              className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add Income
-            </button>
-          </div>
-
-          <input
-            type="text"
-            placeholder="Note (optional)"
-            value={incomeForm.note}
-            onChange={(event) => setIncomeForm((prev) => ({ ...prev, note: event.target.value }))}
-            className="mt-2 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-          />
+          <p className="mt-1 text-xs text-slate-500">
+            Read-only from load payment lifecycle. Use the load payment page for payment workflow updates.
+          </p>
 
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -896,13 +896,14 @@ export default function FinancePage() {
                   <th className="px-2 py-1">Broker</th>
                   <th className="px-2 py-1">Status</th>
                   <th className="px-2 py-1 text-right">Amount</th>
+                  <th className="px-2 py-1 text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {upcomingIncomes.length === 0 && (
                   <tr>
-                    <td className="px-2 py-3 text-slate-500" colSpan={6}>
-                      {isLoading ? 'Loading...' : 'No upcoming income rows in selected range.'}
+                    <td className="px-2 py-3 text-slate-500" colSpan={7}>
+                      {isLoading ? 'Loading...' : 'No income payment rows in selected range.'}
                     </td>
                   </tr>
                 )}
@@ -922,11 +923,139 @@ export default function FinancePage() {
                       <td className="px-2 py-1.5 text-right text-emerald-700 font-semibold">
                         {formatMoney(toNumber(payment.totalWithVat ?? payment.amount))}
                       </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenLoadPayment(payment.loadId)}
+                          className="rounded border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                        >
+                          View Load
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+
+          <div className="mt-5 border-t border-slate-200 pt-4">
+            <h3 className="text-sm font-semibold text-slate-900">Custom Income</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Manual entries not linked to loads (capital injection, refunds, misc income).
+            </p>
+
+            <div className="mt-3 grid gap-2 md:grid-cols-6">
+              <input
+                type="text"
+                placeholder="Description"
+                value={customIncomeForm.description}
+                onChange={(event) =>
+                  setCustomIncomeForm((prev) => ({ ...prev, description: event.target.value }))
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 md:col-span-2"
+              />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Amount"
+                value={customIncomeForm.amount}
+                onChange={(event) =>
+                  setCustomIncomeForm((prev) => ({ ...prev, amount: event.target.value }))
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              />
+              <DateTimePicker
+                mode="date"
+                value={customIncomeForm.incomeDate}
+                onChange={(value) =>
+                  setCustomIncomeForm((prev) => ({ ...prev, incomeDate: value }))
+                }
+                triggerClassName="mt-0"
+              />
+              <input
+                type="text"
+                placeholder="Category (optional)"
+                value={customIncomeForm.category}
+                onChange={(event) =>
+                  setCustomIncomeForm((prev) => ({ ...prev, category: event.target.value }))
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              />
+              <input
+                type="text"
+                placeholder="Reference (optional)"
+                value={customIncomeForm.referenceNumber}
+                onChange={(event) =>
+                  setCustomIncomeForm((prev) => ({ ...prev, referenceNumber: event.target.value }))
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              />
+              <button
+                type="button"
+                onClick={() => void handleAddCustomIncome()}
+                disabled={isSubmitting}
+                className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60 md:col-span-1"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Income
+              </button>
+            </div>
+
+            <textarea
+              placeholder="Notes (optional)"
+              value={customIncomeForm.notes}
+              onChange={(event) =>
+                setCustomIncomeForm((prev) => ({ ...prev, notes: event.target.value }))
+              }
+              className="mt-2 min-h-16 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+            />
+
+            <div className="mt-3 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-2 py-1">Date</th>
+                    <th className="px-2 py-1">Description</th>
+                    <th className="px-2 py-1">Category</th>
+                    <th className="px-2 py-1">Reference</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customIncomesInRange.length === 0 && (
+                    <tr>
+                      <td className="px-2 py-3 text-slate-500" colSpan={6}>
+                        {isLoading ? 'Loading...' : 'No custom income rows in selected range.'}
+                      </td>
+                    </tr>
+                  )}
+                  {customIncomesInRange.map((income) => (
+                    <tr key={income.id} className="border-t border-slate-100">
+                      <td className="px-2 py-1.5 text-slate-700">{formatDateCell(toDateOnly(income.incomeDate))}</td>
+                      <td className="px-2 py-1.5 text-slate-800">{income.description}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{income.category ?? '—'}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{income.referenceNumber ?? '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-semibold text-emerald-700">
+                        {formatMoney(toNumber(income.amount))}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteCustomIncome(income.id)}
+                          className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                          title="Delete custom income"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -956,11 +1085,11 @@ export default function FinancePage() {
               className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
             />
 
-            <input
-              type="date"
+            <DateTimePicker
+              mode="date"
               value={variableForm.date}
-              onChange={(event) => setVariableForm((prev) => ({ ...prev, date: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+              onChange={(value) => setVariableForm((prev) => ({ ...prev, date: value }))}
+              triggerClassName="mt-0"
             />
 
             <input
@@ -1031,6 +1160,31 @@ export default function FinancePage() {
             Opening balance {formatMoney(openingBalance)} • Incoming {formatMoney(simulation.totalIncome)} • Outgoing {formatMoney(simulation.totalOut)} • Projected {formatMoney(simulation.projectedBalance)}
           </p>
 
+          <div className="mt-3 inline-flex rounded-lg border border-slate-300 bg-slate-50 p-1">
+            <button
+              type="button"
+              onClick={() => setIncludeUpcomingIncome(true)}
+              className={`rounded px-3 py-1 text-xs font-semibold ${
+                includeUpcomingIncome
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              With Upcoming Income
+            </button>
+            <button
+              type="button"
+              onClick={() => setIncludeUpcomingIncome(false)}
+              className={`rounded px-3 py-1 text-xs font-semibold ${
+                !includeUpcomingIncome
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              Without Upcoming Income
+            </button>
+          </div>
+
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
@@ -1053,10 +1207,16 @@ export default function FinancePage() {
                 )}
                 {simulation.rows.map((row) => {
                   const isIncome = row.kind === 'INCOME';
+                  const typeLabel =
+                    row.kind === 'INCOME'
+                      ? row.source === 'CUSTOM'
+                        ? 'INCOME (CUSTOM)'
+                        : 'INCOME (PAYMENT)'
+                      : row.kind;
                   return (
                     <tr key={row.id} className="border-t border-slate-100">
                       <td className="px-2 py-1.5 text-slate-700">{formatDateCell(row.date)}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{row.kind}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{typeLabel}</td>
                       <td className="px-2 py-1.5 text-slate-800">{row.label}</td>
                       <td className="px-2 py-1.5 text-right text-emerald-700 font-medium">
                         {isIncome ? formatMoney(row.amount) : '—'}

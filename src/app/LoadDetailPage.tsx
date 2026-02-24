@@ -19,6 +19,7 @@ import {
   PaymentStatus,
 } from '../domain/enums';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
+import { DateTimePicker } from './components/DateTimePicker';
 
 type LoadDetailSection =
   | 'overview'
@@ -2577,13 +2578,12 @@ export default function LoadDetailPage() {
                           <>
                             <label className="mt-2 block text-xs text-slate-600">
                               Send Date
-                              <input
-                                type="date"
+                              <DateTimePicker
+                                mode="date"
                                 value={paymentWorkflow.invoitix.sentAt ?? ''}
-                                onChange={(event) =>
-                                  patchInvoitixWorkflow({ sentAt: normalizeNullableDate(event.target.value) })
+                                onChange={(value) =>
+                                  patchInvoitixWorkflow({ sentAt: normalizeNullableDate(value) })
                                 }
-                                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                               />
                             </label>
                             <button
@@ -2721,14 +2721,13 @@ export default function LoadDetailPage() {
                               </p>
                               <label className="mt-2 block text-xs text-slate-600">
                                 Sent Date
-                                <input
-                                  type="date"
+                                <DateTimePicker
+                                  mode="date"
                                   value={paymentWorkflow.valuta.invoiceSentAt ?? ''}
-                                  onChange={(event) =>
-                                    patchValutaWorkflow({ invoiceSentAt: normalizeNullableDate(event.target.value) })
+                                  onChange={(value) =>
+                                    patchValutaWorkflow({ invoiceSentAt: normalizeNullableDate(value) })
                                   }
                                   disabled={isValutaEmailStepDone}
-                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
                                 />
                               </label>
                               {!isValutaEmailStepDone && (
@@ -2844,14 +2843,13 @@ export default function LoadDetailPage() {
                               </p>
                               <label className="mt-2 block text-xs text-slate-600">
                                 Sent Date
-                                <input
-                                  type="date"
+                                <DateTimePicker
+                                  mode="date"
                                   value={paymentWorkflow.valuta.shippedAt ?? ''}
-                                  onChange={(event) =>
-                                    patchValutaWorkflow({ shippedAt: normalizeNullableDate(event.target.value) })
+                                  onChange={(value) =>
+                                    patchValutaWorkflow({ shippedAt: normalizeNullableDate(value) })
                                   }
                                   disabled={isValutaOriginalsSentStepDone}
-                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
                                 />
                               </label>
                               <label className="mt-2 block text-xs text-slate-600">
@@ -2923,14 +2921,13 @@ export default function LoadDetailPage() {
                               </p>
                               <label className="mt-2 block text-xs text-slate-600">
                                 Arrival Date
-                                <input
-                                  type="date"
+                                <DateTimePicker
+                                  mode="date"
                                   value={paymentWorkflow.valuta.documentsArrivedAt ?? ''}
-                                  onChange={(event) =>
-                                    patchValutaWorkflow({ documentsArrivedAt: normalizeNullableDate(event.target.value) })
+                                  onChange={(value) =>
+                                    patchValutaWorkflow({ documentsArrivedAt: normalizeNullableDate(value) })
                                   }
                                   disabled={isValutaOriginalsArrivedStepDone}
-                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
                                 />
                               </label>
                               {!isValutaOriginalsArrivedStepDone && (
@@ -3502,16 +3499,15 @@ export default function LoadDetailPage() {
                 </label>
                 <label className="text-xs text-slate-600">
                   Insurance Valid Until
-                  <input
-                    type="date"
+                  <DateTimePicker
+                    mode="date"
                     value={brokerOtherDraft.insuranceValidUntil}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setBrokerOtherDraft((prev) => ({
                         ...prev,
-                        insuranceValidUntil: event.target.value,
+                        insuranceValidUntil: value,
                       }))
                     }
-                    className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                   />
                 </label>
                 <label className="text-xs text-slate-600">
@@ -3530,30 +3526,28 @@ export default function LoadDetailPage() {
                 </label>
                 <label className="text-xs text-slate-600">
                   License Valid Until
-                  <input
-                    type="date"
+                  <DateTimePicker
+                    mode="date"
                     value={brokerOtherDraft.licenseValidUntil}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setBrokerOtherDraft((prev) => ({
                         ...prev,
-                        licenseValidUntil: event.target.value,
+                        licenseValidUntil: value,
                       }))
                     }
-                    className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                   />
                 </label>
                 <label className="text-xs text-slate-600">
                   Platform Member Since
-                  <input
-                    type="date"
+                  <DateTimePicker
+                    mode="date"
                     value={brokerOtherDraft.platformMemberSince}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setBrokerOtherDraft((prev) => ({
                         ...prev,
-                        platformMemberSince: event.target.value,
+                        platformMemberSince: value,
                       }))
                     }
-                    className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                   />
                 </label>
                 <label className="text-xs text-slate-600">

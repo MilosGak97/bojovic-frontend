@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Plus, Trash2, Upload, X } from 'lucide-react';
-import { brokerApi, brokerContactApi, loadApi, vanApi } from '../../api';
+import { brokerApi, brokerContactApi, loadApi, tripApi } from '../../api';
 import type { CreateBrokerCompanyDto, CreateBrokerContactDto, CreateLoadDto } from '../../domain/dto';
 import {
   Currency,
@@ -8,13 +8,14 @@ import {
   LoadStatus,
   StopType,
 } from '../../domain/enums';
-import type { Load, Van } from '../../domain/entities';
+import type { Load, Trip } from '../../domain/entities';
+import { DateTimePicker } from './DateTimePicker';
 
 interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated?: (load: Load) => void;
-  defaultPlannerVanId?: string;
+  defaultTripId?: string;
 }
 
 interface PalletDraft {
@@ -118,7 +119,7 @@ export function UploadModal({
   isOpen,
   onClose,
   onCreated,
-  defaultPlannerVanId,
+  defaultTripId,
 }: UploadModalProps) {
   const [activeTab, setActiveTab] = useState<UploadModalTab>('manual');
   const [isBrokerTranseuExpanded, setIsBrokerTranseuExpanded] = useState(false);
@@ -126,15 +127,15 @@ export function UploadModal({
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [plannerVans, setPlannerVans] = useState<Van[]>([]);
-  const [isLoadingPlannerVans, setIsLoadingPlannerVans] = useState(false);
-  const [plannerVansError, setPlannerVansError] = useState<string | null>(null);
+  const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
+  const [isLoadingTrips, setIsLoadingTrips] = useState(false);
+  const [tripsError, setTripsError] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     referenceNumber: '',
     transEuFreightNumber: '',
     status: LoadStatus.ON_BOARD,
-    plannerVanId: defaultPlannerVanId ?? '',
+    tripId: defaultTripId ?? '',
     boardSource: LoadBoardSource.MANUAL,
     color: '#3B82F6',
     brokerageName: '',
@@ -198,42 +199,42 @@ export function UploadModal({
     if (!isOpen) return;
 
     let cancelled = false;
-    const loadPlannerVans = async () => {
-      setIsLoadingPlannerVans(true);
-      setPlannerVansError(null);
+    const loadActiveTrips = async () => {
+      setIsLoadingTrips(true);
+      setTripsError(null);
       try {
-        const response = await vanApi.getAll();
+        const response = await tripApi.getActive();
         if (!cancelled) {
-          setPlannerVans(response);
+          setActiveTrips(response);
           setForm((prev) => {
-            const hasCurrent = prev.plannerVanId && response.some((van) => van.id === prev.plannerVanId);
+            const hasCurrent = prev.tripId && response.some((trip) => trip.id === prev.tripId);
             if (hasCurrent) return prev;
-            if (defaultPlannerVanId && response.some((van) => van.id === defaultPlannerVanId)) {
-              return { ...prev, plannerVanId: defaultPlannerVanId };
+            if (defaultTripId && response.some((trip) => trip.id === defaultTripId)) {
+              return { ...prev, tripId: defaultTripId };
             }
-            return { ...prev, plannerVanId: '' };
+            return { ...prev, tripId: '' };
           });
         }
       } catch (requestError) {
         if (!cancelled) {
-          setPlannerVans([]);
-          setPlannerVansError(
-            requestError instanceof Error ? requestError.message : 'Failed to load vehicles.',
+          setActiveTrips([]);
+          setTripsError(
+            requestError instanceof Error ? requestError.message : 'Failed to load trips.',
           );
         }
       } finally {
         if (!cancelled) {
-          setIsLoadingPlannerVans(false);
+          setIsLoadingTrips(false);
         }
       }
     };
 
-    void loadPlannerVans();
+    void loadActiveTrips();
 
     return () => {
       cancelled = true;
     };
-  }, [isOpen, defaultPlannerVanId]);
+  }, [isOpen, defaultTripId]);
 
   if (!isOpen) return null;
 
@@ -258,7 +259,7 @@ export function UploadModal({
       referenceNumber: '',
       transEuFreightNumber: '',
       status: LoadStatus.ON_BOARD,
-      plannerVanId: defaultPlannerVanId ?? '',
+      tripId: defaultTripId ?? '',
       boardSource: LoadBoardSource.MANUAL,
       color: '#3B82F6',
       brokerageName: '',
@@ -430,7 +431,7 @@ export function UploadModal({
       ...(form.transEuFreightNumber.trim()
         ? { transEuFreightNumber: form.transEuFreightNumber.trim() }
         : {}),
-      ...(form.plannerVanId ? { plannerVanId: form.plannerVanId } : {}),
+      ...(form.tripId ? { tripId: form.tripId } : {}),
       status: form.status,
       boardSource: form.boardSource,
       ...(form.color.trim() ? { color: form.color.trim() } : {}),
@@ -826,22 +827,30 @@ export function UploadModal({
                     />
                   </label>
                   <label className="text-xs text-gray-600">
-                    Add To Load Planner (Vehicle)
+                    Add To Load Planner (Trip)
                     <select
-                      value={form.plannerVanId}
-                      onChange={(event) => updateForm('plannerVanId', event.target.value)}
-                      disabled={isLoadingPlannerVans}
+                      value={form.tripId}
+                      onChange={(event) => updateForm('tripId', event.target.value)}
+                      disabled={isLoadingTrips}
                       className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 disabled:bg-gray-100"
                     >
                       <option value="">Not assigned</option>
-                      {plannerVans.map((van) => (
-                        <option key={van.id} value={van.id}>
-                          {van.name} • {van.licensePlate}
-                        </option>
-                      ))}
+                      {activeTrips.map((trip) => {
+                        const driverName = trip.driver
+                          ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+                          : 'No driver';
+                        const vanInfo = trip.van
+                          ? `${trip.van.name} (${trip.van.licensePlate})`
+                          : 'No vehicle';
+                        return (
+                          <option key={trip.id} value={trip.id}>
+                            {driverName} — {vanInfo}
+                          </option>
+                        );
+                      })}
                     </select>
-                    {plannerVansError && (
-                      <span className="mt-1 block text-[11px] text-rose-600">{plannerVansError}</span>
+                    {tripsError && (
+                      <span className="mt-1 block text-[11px] text-rose-600">{tripsError}</span>
                     )}
                   </label>
                   <label className="text-xs text-gray-600">
@@ -1087,20 +1096,18 @@ export function UploadModal({
                   </label>
                   <label className="text-xs text-gray-600">
                     Date From *
-                    <input
-                      type="datetime-local"
+                    <DateTimePicker
+                      mode="datetime"
                       value={form.pickupDateFrom}
-                      onChange={(event) => updateForm('pickupDateFrom', event.target.value)}
-                      className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                      onChange={(value) => updateForm('pickupDateFrom', value)}
                     />
                   </label>
                   <label className="text-xs text-gray-600">
                     Date To
-                    <input
-                      type="datetime-local"
+                    <DateTimePicker
+                      mode="datetime"
                       value={form.pickupDateTo}
-                      onChange={(event) => updateForm('pickupDateTo', event.target.value)}
-                      className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                      onChange={(value) => updateForm('pickupDateTo', value)}
                     />
                   </label>
                   <label className="text-xs text-gray-600">
@@ -1169,20 +1176,18 @@ export function UploadModal({
                   </label>
                   <label className="text-xs text-gray-600">
                     Date From *
-                    <input
-                      type="datetime-local"
+                    <DateTimePicker
+                      mode="datetime"
                       value={form.deliveryDateFrom}
-                      onChange={(event) => updateForm('deliveryDateFrom', event.target.value)}
-                      className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                      onChange={(value) => updateForm('deliveryDateFrom', value)}
                     />
                   </label>
                   <label className="text-xs text-gray-600">
                     Date To
-                    <input
-                      type="datetime-local"
+                    <DateTimePicker
+                      mode="datetime"
                       value={form.deliveryDateTo}
-                      onChange={(event) => updateForm('deliveryDateTo', event.target.value)}
-                      className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900"
+                      onChange={(value) => updateForm('deliveryDateTo', value)}
                     />
                   </label>
                   <label className="text-xs text-gray-600">
@@ -1478,17 +1483,17 @@ export function UploadModal({
                         className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900"
                         placeholder="Pallets"
                       />
-                      <input
-                        type="datetime-local"
+                      <DateTimePicker
+                        mode="datetime"
                         value={stop.dateFrom}
-                        onChange={(event) => updateExtraStop(stop.id, { dateFrom: event.target.value })}
-                        className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900"
+                        onChange={(value) => updateExtraStop(stop.id, { dateFrom: value })}
+                        triggerClassName="mt-0 px-2 py-1 text-xs"
                       />
-                      <input
-                        type="datetime-local"
+                      <DateTimePicker
+                        mode="datetime"
                         value={stop.dateTo}
-                        onChange={(event) => updateExtraStop(stop.id, { dateTo: event.target.value })}
-                        className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900"
+                        onChange={(value) => updateExtraStop(stop.id, { dateTo: value })}
+                        triggerClassName="mt-0 px-2 py-1 text-xs"
                       />
                       <input
                         type="text"

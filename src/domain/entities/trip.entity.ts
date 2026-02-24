@@ -8,7 +8,9 @@ export interface Trip extends BaseEntity {
   driverId: string;
   vanId: string;
   status: TripStatus;
-  departureDate: string;
+  loadboardFromDate: string;
+  plannedEndDate: string | null;
+  departureDate: string | null;
   returnDate: string | null;
   startOdometerKm: number | null;
   endOdometerKm: number | null;

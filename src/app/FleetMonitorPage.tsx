@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, X } from 'lucide-react';
-import { vanApi } from '../api';
+import { Play, Plus, Trash2, X } from 'lucide-react';
+import { driverApi, tripApi, vanApi } from '../api';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
-import type { CreateVanDto } from '../domain/dto';
-import type { Van } from '../domain/entities';
-import { VanStatus, VanType } from '../domain/enums';
+import { CreateTripModal } from './components/CreateTripModal';
+import type { CreateTripDto, CreateVanDto } from '../domain/dto';
+import type { Driver, Trip, Van } from '../domain/entities';
+import { DriverStatus, TripStatus, VanStatus, VanType } from '../domain/enums';
 
 const VEHICLE_TYPE_OPTIONS: Array<{
   value: VanType;
@@ -55,13 +56,31 @@ const toPositiveInteger = (value: string): number | null => {
   return Math.round(parsed);
 };
 
+const toDatetimeLocalValue = (date?: string | null): string => {
+  const value = date ? new Date(date) : new Date();
+  if (Number.isNaN(value.getTime())) return '';
+  const offset = value.getTimezoneOffset();
+  const localDate = new Date(value.getTime() - offset * 60_000);
+  return localDate.toISOString().slice(0, 16);
+};
+
+const toIso = (localDatetime: string): string => new Date(localDatetime).toISOString();
+
 export default function FleetMonitorPage() {
   const [vans, setVans] = useState<Van[]>([]);
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isTripModalOpen, setIsTripModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [tripFormError, setTripFormError] = useState<string | null>(null);
+
+  const [tripDriverId, setTripDriverId] = useState('');
+  const [tripVanId, setTripVanId] = useState('');
+  const [tripLoadboardFrom, setTripLoadboardFrom] = useState(toDatetimeLocalValue());
 
   const [form, setForm] = useState({
     name: '',
@@ -73,23 +92,31 @@ export default function FleetMonitorPage() {
     cargoHeightCm: '220',
   });
 
-  const loadVans = useCallback(async () => {
+  const loadPageData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await vanApi.getAll();
-      setVans(response);
+      const [vansData, driversData, tripsData] = await Promise.all([
+        vanApi.getAll(),
+        driverApi.getAll(),
+        tripApi.getActive(),
+      ]);
+      setVans(vansData);
+      setDrivers(driversData);
+      setActiveTrips(tripsData);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to load vehicles.');
       setVans([]);
+      setDrivers([]);
+      setActiveTrips([]);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadVans();
-  }, [loadVans]);
+    void loadPageData();
+  }, [loadPageData]);
 
   const selectedType = useMemo(
     () => VEHICLE_TYPE_OPTIONS.find((option) => option.value === form.vehicleType) ?? VEHICLE_TYPE_OPTIONS[2],
@@ -102,6 +129,105 @@ export default function FleetMonitorPage() {
     if (!length || !width) return 0;
     return Math.floor(length / 120) * Math.floor(width / 80);
   }, [form.cargoLengthCm, form.cargoWidthCm]);
+
+  const activeDriverIds = useMemo(
+    () => new Set(activeTrips.map((trip) => trip.driverId)),
+    [activeTrips],
+  );
+
+  const plannedVanIds = useMemo(
+    () =>
+      new Set(
+        activeTrips
+          .filter((trip) => trip.status === TripStatus.PLANNED)
+          .map((trip) => trip.vanId),
+      ),
+    [activeTrips],
+  );
+
+  const availableDrivers = useMemo(
+    () =>
+      drivers.filter(
+        (driver) =>
+          driver.isActive &&
+          driver.status === DriverStatus.AVAILABLE &&
+          !activeDriverIds.has(driver.id),
+      ),
+    [drivers, activeDriverIds],
+  );
+
+  const planningVans = useMemo(
+    () =>
+      vans.filter(
+        (van) =>
+          [VanStatus.AVAILABLE, VanStatus.ON_ROUTE].includes(van.status) &&
+          !plannedVanIds.has(van.id),
+      ),
+    [vans, plannedVanIds],
+  );
+
+  const openTripModal = (preferredVanId?: string) => {
+    const preferredVan = preferredVanId
+      ? planningVans.find((van) => van.id === preferredVanId) ?? null
+      : null;
+    const selectedVan = preferredVan ?? planningVans[0] ?? null;
+    const selectedDriver = availableDrivers[0] ?? null;
+
+    setTripDriverId(selectedDriver?.id ?? '');
+    setTripVanId(selectedVan?.id ?? '');
+    setTripLoadboardFrom(toDatetimeLocalValue());
+    setTripFormError(null);
+    setIsTripModalOpen(true);
+  };
+
+  const closeTripModal = () => {
+    setIsTripModalOpen(false);
+    setTripDriverId('');
+    setTripVanId('');
+    setTripFormError(null);
+  };
+
+  const handleCreateTrip = async () => {
+    setTripFormError(null);
+
+    if (!tripDriverId || !tripVanId) {
+      setTripFormError('Select both driver and vehicle.');
+      return;
+    }
+    if (!tripLoadboardFrom) {
+      setTripFormError('Loadboard from date/time is required.');
+      return;
+    }
+    const isDriverSelectable = availableDrivers.some((driver) => driver.id === tripDriverId);
+    if (!isDriverSelectable) {
+      setTripFormError('Selected driver is no longer available.');
+      return;
+    }
+
+    const isVanSelectable = planningVans.some((van) => van.id === tripVanId);
+    if (!isVanSelectable) {
+      setTripFormError('Selected vehicle is no longer available.');
+      return;
+    }
+
+    const payload: CreateTripDto = {
+      driverId: tripDriverId,
+      vanId: tripVanId,
+      loadboardFromDate: toIso(tripLoadboardFrom),
+      departureDate: toIso(tripLoadboardFrom),
+    };
+
+    setIsSubmitting(true);
+    try {
+      await tripApi.create(payload);
+      closeTripModal();
+      await loadPageData();
+    } catch (requestError) {
+      setTripFormError(requestError instanceof Error ? requestError.message : 'Failed to create trip.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleCreateVehicle = async () => {
     setFormError(null);
@@ -149,7 +275,7 @@ export default function FleetMonitorPage() {
         cargoHeightCm: '220',
       });
       setIsCreateModalOpen(false);
-      await loadVans();
+      await loadPageData();
     } catch (requestError) {
       setFormError(requestError instanceof Error ? requestError.message : 'Failed to create vehicle.');
     } finally {
@@ -160,7 +286,7 @@ export default function FleetMonitorPage() {
   const handleDeleteVehicle = async (id: string) => {
     try {
       await vanApi.delete(id);
-      await loadVans();
+      await loadPageData();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to delete vehicle.');
     }
@@ -183,17 +309,29 @@ export default function FleetMonitorPage() {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setFormError(null);
-                setIsCreateModalOpen(true);
-              }}
-              className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add Vehicle
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => openTripModal()}
+                disabled={availableDrivers.length === 0 || planningVans.length === 0}
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Play className="h-3.5 w-3.5" />
+                Create Trip
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setFormError(null);
+                  setIsCreateModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Vehicle
+              </button>
+            </div>
           </div>
         </header>
 
@@ -264,14 +402,28 @@ export default function FleetMonitorPage() {
                         </td>
                         <td className="px-3 py-2 text-slate-700">{van.status}</td>
                         <td className="px-3 py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteVehicle(van.id)}
-                            className="inline-flex items-center rounded border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100"
-                            title="Delete vehicle"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openTripModal(van.id)}
+                              disabled={
+                                availableDrivers.length === 0 ||
+                                !planningVans.some((row) => row.id === van.id)
+                              }
+                              className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              title="Create trip for this vehicle"
+                            >
+                              Trip
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteVehicle(van.id)}
+                              className="inline-flex items-center rounded border border-rose-200 bg-rose-50 p-1.5 text-rose-600 hover:bg-rose-100"
+                              title="Delete vehicle"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                   ))}
@@ -323,6 +475,36 @@ export default function FleetMonitorPage() {
           </section>
         </div>
       </div>
+
+      <CreateTripModal
+        isOpen={isTripModalOpen}
+        isSubmitting={isSubmitting}
+        error={tripFormError}
+        driverOptions={availableDrivers.map((driver) => ({
+          id: driver.id,
+          name: `${driver.firstName} ${driver.lastName}`,
+          email: driver.email,
+          phone: driver.phone,
+        }))}
+        vanOptions={planningVans.map((van) => ({
+          id: van.id,
+          name: van.name,
+          licensePlate: van.licensePlate,
+          status: van.status,
+          vehicleId: van.vehicleId,
+          driverName: van.assignedDriver
+            ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+            : null,
+        }))}
+        driverId={tripDriverId}
+        vanId={tripVanId}
+        loadboardFrom={tripLoadboardFrom}
+        onDriverChange={setTripDriverId}
+        onVanChange={setTripVanId}
+        onLoadboardFromChange={setTripLoadboardFrom}
+        onClose={closeTripModal}
+        onSubmit={() => void handleCreateTrip()}
+      />
 
       {isCreateModalOpen && (
         <div

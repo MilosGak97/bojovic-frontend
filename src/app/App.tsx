@@ -20,7 +20,7 @@ import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { RouteModeToggle } from './components/RouteModeToggle';
 import { SimulationImpactPanel, type SimulationImpact } from './components/SimulationImpactPanel';
 import { RouteComparison } from './components/RouteComparison';
-import { VanSelector } from './components/VanSelector';
+import { TripSelector } from './components/TripSelector';
 import { loadApi } from '../api';
 import type { Load as ApiLoad } from '../domain/entities';
 import {
@@ -400,7 +400,7 @@ export default function App() {
     warnings: ['Pushes Stop 4 by +45m', '12 cm overflow at Stop 3'],
   });
   const [selectedCargoStopId, setSelectedCargoStopId] = useState('S001'); // For cargo timeline
-  const [selectedVan, setSelectedVan] = useState('');
+  const [selectedTrip, setSelectedTrip] = useState('');
   const [organizerVanCargoPosition, setOrganizerVanCargoPosition] = useState({ x: 24, y: 24 });
   const [middleWorkspaceTab, setMiddleWorkspaceTab] = useState<MiddleWorkspaceTab>('load-planner');
   const [draggingSidebarStopIndex, setDraggingSidebarStopIndex] = useState<number | null>(null);
@@ -418,19 +418,19 @@ export default function App() {
   const plannerSyncTimerRef = useRef<number | null>(null);
   const plannerLastSyncedFingerprintRef = useRef<string>('');
 
-  const hasAnyPlannerVanAssignment = useMemo(
-    () => loads.some((load) => Boolean(load.plannerVanId)),
+  const hasAnyTripAssignment = useMemo(
+    () => loads.some((load) => Boolean(load.tripId)),
     [loads],
   );
   const visiblePlannerLoads = useMemo(() => {
-    if (!hasAnyPlannerVanAssignment) {
+    if (!hasAnyTripAssignment) {
       return loads;
     }
-    if (!selectedVan) {
-      return loads.filter((load) => Boolean(load.plannerVanId));
+    if (!selectedTrip) {
+      return loads.filter((load) => Boolean(load.tripId));
     }
-    return loads.filter((load) => load.plannerVanId === selectedVan);
-  }, [hasAnyPlannerVanAssignment, loads, selectedVan]);
+    return loads.filter((load) => load.tripId === selectedTrip);
+  }, [hasAnyTripAssignment, loads, selectedTrip]);
 
   useEffect(() => {
     if (!selectedLoadId) return;
@@ -807,7 +807,7 @@ export default function App() {
     const wasPlanned = isPlannedStatus(currentLoad.status);
     const isPlanned = isPlannedStatus(status);
 
-    if (isPlanned && !wasPlanned && currentLoad.plannerVanId) {
+    if (isPlanned && !wasPlanned && currentLoad.tripId) {
       handleLoadToVan({ ...currentLoad, status });
     } else if (!isPlanned && wasPlanned) {
       handleRemoveFromVan({ ...currentLoad, status });
@@ -840,7 +840,7 @@ export default function App() {
 
   // Handle Load to Van - creates pickup and delivery stops immediately
   const handleLoadToVan = useCallback((load: PlannerLoad) => {
-    if (!load.plannerVanId) return;
+    if (!load.tripId) return;
 
     // Check if this load is already in the route (prevent duplicates)
     const alreadyLoaded = stops.some(stop => stop.loadId === load.id);
@@ -942,7 +942,7 @@ export default function App() {
       ),
     );
 
-    if ((targetStatus === 'TAKEN' || targetStatus === 'NEGOTIATING') && reactivatedLoad.plannerVanId) {
+    if ((targetStatus === 'TAKEN' || targetStatus === 'NEGOTIATING') && reactivatedLoad.tripId) {
       handleLoadToVan(reactivatedLoad);
     } else {
       handleRemoveFromVan(reactivatedLoad);
@@ -1007,7 +1007,7 @@ export default function App() {
     const wasPlanned = isPlannedStatus(currentLoad.status);
     const isPlanned = isPlannedStatus(normalizedUpdatedLoad.status);
 
-    if (isPlanned && !wasPlanned && normalizedUpdatedLoad.plannerVanId) {
+    if (isPlanned && !wasPlanned && normalizedUpdatedLoad.tripId) {
       handleLoadToVan(normalizedUpdatedLoad);
     } else if (!isPlanned && wasPlanned) {
       handleRemoveFromVan(normalizedUpdatedLoad);
@@ -1447,9 +1447,9 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
-            <VanSelector
-              selectedVanId={selectedVan}
-              onVanChange={setSelectedVan}
+            <TripSelector
+              selectedTripId={selectedTrip}
+              onTripChange={setSelectedTrip}
             />
 
             <RouteModeToggle
@@ -1957,7 +1957,7 @@ export default function App() {
                       <div className="mx-auto h-full min-w-[880px] max-w-[1280px] p-6">
                         <div className="relative h-full min-h-[680px] rounded-2xl border border-slate-300 bg-white/70 shadow-inner backdrop-blur-sm">
                           <CanvasVanCargo
-                            vanId={selectedVan}
+                            vanId={selectedTrip}
                             x={organizerVanCargoPosition.x}
                             y={organizerVanCargoPosition.y}
                             onMove={(x, y) => setOrganizerVanCargoPosition({ x, y })}
@@ -2287,7 +2287,7 @@ export default function App() {
           isOpen={showUploadModal}
           onClose={() => setShowUploadModal(false)}
           onCreated={handleFreightCreated}
-          defaultPlannerVanId={selectedVan}
+          defaultTripId={selectedTrip}
         />
         <EditLoadModal
           isOpen={editingLoad !== null}

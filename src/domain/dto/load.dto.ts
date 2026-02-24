@@ -86,7 +86,6 @@ export interface CreateLoadDto {
   vehicleMonitoringRequired?: boolean;
   brokerId?: string;
   brokerContactId?: string;
-  plannerVanId?: string;
   tripId?: string;
   notes?: string;
 
