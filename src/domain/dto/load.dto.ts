@@ -7,6 +7,7 @@ import {
 } from '../enums';
 
 export interface CreateLoadStopDto {
+  id?: string;
   stopType: StopType;
   address: string;
   city: string;
@@ -39,6 +40,7 @@ export interface CreateLoadFreightDto {
 }
 
 export interface CreateLoadPalletDto {
+  id?: string;
   label?: string;
   widthCm: number;
   heightCm: number;
