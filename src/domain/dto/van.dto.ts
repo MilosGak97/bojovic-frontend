@@ -23,6 +23,7 @@ export interface CreateVanDto {
   monthlyInsuranceCost?: number;
   costCurrency?: Currency;
   notes?: string;
+  assignedDriverId?: string | null;
 }
 
 export type UpdateVanDto = Partial<CreateVanDto>;

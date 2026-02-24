@@ -1,5 +1,6 @@
 import { BaseEntity } from './base.entity';
 import { VanStatus, VanType, Currency } from '../enums';
+import type { Driver } from './driver.entity';
 
 export interface Van extends BaseEntity {
   name: string;
@@ -28,4 +29,6 @@ export interface Van extends BaseEntity {
   monthlyInsuranceCost: number | null;
   costCurrency: Currency | null;
   notes: string | null;
+  assignedDriverId: string | null;
+  assignedDriver?: Driver | null;
 }

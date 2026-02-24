@@ -115,8 +115,14 @@ export default function LoadBoardPage() {
   const [selectedLoadIds, setSelectedLoadIds] = useState<string[]>([]);
   const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
   const [bulkPlannerVanId, setBulkPlannerVanId] = useState('');
+  const [bulkVehicleSearch, setBulkVehicleSearch] = useState('');
   const [isBulkAssigning, setIsBulkAssigning] = useState(false);
   const [bulkAssignError, setBulkAssignError] = useState<string | null>(null);
+  const [singlePlannerLoad, setSinglePlannerLoad] = useState<Load | null>(null);
+  const [singlePlannerVanId, setSinglePlannerVanId] = useState('');
+  const [singleVehicleSearch, setSingleVehicleSearch] = useState('');
+  const [isSingleAssigning, setIsSingleAssigning] = useState(false);
+  const [singleAssignError, setSingleAssignError] = useState<string | null>(null);
 
   const focusedLoadId = searchParams.get('loadId')?.trim() ?? '';
   const isPaymentFocus = searchParams.get('focus') === 'payment';
@@ -243,10 +249,26 @@ export default function LoadBoardPage() {
 
   const openBulkAssign = () => {
     setBulkAssignError(null);
+    setBulkVehicleSearch('');
     if (!bulkPlannerVanId && plannerVans.length > 0) {
       setBulkPlannerVanId(plannerVans[0].id);
     }
     setIsBulkAssignOpen(true);
+  };
+
+  const openSingleAssign = (load: Load) => {
+    setSingleAssignError(null);
+    setSingleVehicleSearch('');
+    setSinglePlannerLoad(load);
+    setSinglePlannerVanId(load.plannerVanId ?? plannerVans[0]?.id ?? '');
+  };
+
+  const closeSingleAssign = () => {
+    if (isSingleAssigning) return;
+    setSinglePlannerLoad(null);
+    setSinglePlannerVanId('');
+    setSingleVehicleSearch('');
+    setSingleAssignError(null);
   };
 
   const clearFocusedLoad = () => {
@@ -288,6 +310,67 @@ export default function LoadBoardPage() {
       setIsBulkAssigning(false);
     }
   };
+
+  const handleSingleAddToPlanner = async () => {
+    if (!singlePlannerLoad) return;
+    if (!singlePlannerVanId) {
+      setSingleAssignError('Select a vehicle.');
+      return;
+    }
+
+    setIsSingleAssigning(true);
+    setSingleAssignError(null);
+
+    try {
+      await loadApi.update(singlePlannerLoad.id, {
+        plannerVanId: singlePlannerVanId,
+      });
+
+      const selectedVan = plannerVansById.get(singlePlannerVanId) ?? null;
+      setLoads((prev) =>
+        prev.map((load) =>
+          load.id === singlePlannerLoad.id
+            ? {
+                ...load,
+                plannerVanId: singlePlannerVanId,
+                plannerVan: selectedVan,
+              }
+            : load,
+        ),
+      );
+
+      setSinglePlannerLoad(null);
+      setSinglePlannerVanId('');
+    } catch (requestError) {
+      setSingleAssignError(
+        requestError instanceof Error ? requestError.message : 'Failed to add load to planner.',
+      );
+    } finally {
+      setIsSingleAssigning(false);
+    }
+  };
+
+  const filteredBulkPlannerVans = useMemo(() => {
+    const term = bulkVehicleSearch.trim().toLowerCase();
+    if (!term) return plannerVans;
+    return plannerVans.filter((van) => {
+      const driverName = van.assignedDriver
+        ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+        : '';
+      return `${van.name} ${van.licensePlate} ${driverName}`.toLowerCase().includes(term);
+    });
+  }, [bulkVehicleSearch, plannerVans]);
+
+  const filteredSinglePlannerVans = useMemo(() => {
+    const term = singleVehicleSearch.trim().toLowerCase();
+    if (!term) return plannerVans;
+    return plannerVans.filter((van) => {
+      const driverName = van.assignedDriver
+        ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+        : '';
+      return `${van.name} ${van.licensePlate} ${driverName}`.toLowerCase().includes(term);
+    });
+  }, [plannerVans, singleVehicleSearch]);
 
   return (
     <main className="min-h-screen bg-slate-100">
@@ -467,7 +550,20 @@ export default function LoadBoardPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-slate-700">{formatBoardSource(load)}</td>
-                      <td className="px-3 py-2 text-slate-700">{formatPlannerVehicle(load)}</td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {load.plannerVanId ? (
+                          formatPlannerVehicle(load)
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openSingleAssign(load)}
+                            className="font-semibold text-blue-700 underline decoration-blue-300 underline-offset-2 hover:text-blue-800"
+                            title="Add this load to planner"
+                          >
+                            Not in planner
+                          </button>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-slate-700">
                         {load.broker?.companyName || '—'}
                       </td>
@@ -502,7 +598,7 @@ export default function LoadBoardPage() {
           onClick={() => setIsBulkAssignOpen(false)}
         >
           <section
-            className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            className="w-full max-w-6xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <h3 className="text-sm font-semibold text-slate-900">Add Loads To Load Planner</h3>
@@ -511,22 +607,56 @@ export default function LoadBoardPage() {
             </p>
 
             <label className="mt-3 block text-xs text-slate-600">
-              Vehicle
-              <select
-                value={bulkPlannerVanId}
-                onChange={(event) => setBulkPlannerVanId(event.target.value)}
+              Search Vehicle
+              <input
+                type="text"
+                value={bulkVehicleSearch}
+                onChange={(event) => setBulkVehicleSearch(event.target.value)}
+                placeholder="Search by vehicle name, plate, or assigned driver..."
                 disabled={isLoadingPlannerVans || plannerVans.length === 0 || isBulkAssigning}
-                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 disabled:bg-slate-100"
-              >
-                <option value="">Select vehicle</option>
-                {plannerVans.map((van) => (
-                  <option key={van.id} value={van.id}>
-                    {van.name} • {van.licensePlate}
-                  </option>
-                ))}
-              </select>
-              {plannerVansError && <span className="mt-1 block text-[11px] text-rose-600">{plannerVansError}</span>}
+                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100"
+              />
             </label>
+
+            <div className="mt-2 grid max-h-72 grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 overflow-y-auto pr-1">
+              {isLoadingPlannerVans && (
+                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                  Loading vehicles...
+                </p>
+              )}
+              {!isLoadingPlannerVans && filteredBulkPlannerVans.length === 0 && (
+                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                  No vehicles match this search.
+                </p>
+              )}
+              {!isLoadingPlannerVans &&
+                filteredBulkPlannerVans.map((van) => {
+                  const isSelected = bulkPlannerVanId === van.id;
+                  return (
+                    <button
+                      key={van.id}
+                      type="button"
+                      onClick={() => setBulkPlannerVanId(van.id)}
+                      disabled={isBulkAssigning}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                        isSelected
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      <p className="text-sm font-semibold text-slate-900">{van.name}</p>
+                      <p className="text-xs text-slate-600">{van.licensePlate}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Driver:{' '}
+                        {van.assignedDriver
+                          ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+                          : 'Unassigned'}
+                      </p>
+                    </button>
+                  );
+                })}
+            </div>
+            {plannerVansError && <span className="mt-1 block text-[11px] text-rose-600">{plannerVansError}</span>}
 
             {bulkAssignError && (
               <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
@@ -550,6 +680,100 @@ export default function LoadBoardPage() {
                 className="rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isBulkAssigning ? 'Assigning...' : 'Add To Planner'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {singlePlannerLoad && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
+          onClick={closeSingleAssign}
+        >
+          <section
+            className="w-full max-w-6xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold text-slate-900">Add Load To Planner</h3>
+            <p className="mt-1 text-xs text-slate-600">
+              Load: <span className="font-semibold text-slate-800">{singlePlannerLoad.referenceNumber}</span>
+            </p>
+
+            <label className="mt-3 block text-xs text-slate-600">
+              Search Vehicle
+              <input
+                type="text"
+                value={singleVehicleSearch}
+                onChange={(event) => setSingleVehicleSearch(event.target.value)}
+                placeholder="Search by vehicle name, plate, or assigned driver..."
+                disabled={isLoadingPlannerVans || plannerVans.length === 0 || isSingleAssigning}
+                className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100"
+              />
+            </label>
+
+            <div className="mt-2 grid max-h-72 grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 overflow-y-auto pr-1">
+              {isLoadingPlannerVans && (
+                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                  Loading vehicles...
+                </p>
+              )}
+              {!isLoadingPlannerVans && filteredSinglePlannerVans.length === 0 && (
+                <p className="col-span-full rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                  No vehicles match this search.
+                </p>
+              )}
+              {!isLoadingPlannerVans &&
+                filteredSinglePlannerVans.map((van) => {
+                  const isSelected = singlePlannerVanId === van.id;
+                  return (
+                    <button
+                      key={van.id}
+                      type="button"
+                      onClick={() => setSinglePlannerVanId(van.id)}
+                      disabled={isSingleAssigning}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                        isSelected
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      <p className="text-sm font-semibold text-slate-900">{van.name}</p>
+                      <p className="text-xs text-slate-600">{van.licensePlate}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Driver:{' '}
+                        {van.assignedDriver
+                          ? `${van.assignedDriver.firstName} ${van.assignedDriver.lastName}`
+                          : 'Unassigned'}
+                      </p>
+                    </button>
+                  );
+                })}
+            </div>
+            {plannerVansError && <span className="mt-1 block text-[11px] text-rose-600">{plannerVansError}</span>}
+
+            {singleAssignError && (
+              <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                {singleAssignError}
+              </p>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeSingleAssign}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                disabled={isSingleAssigning}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSingleAddToPlanner()}
+                disabled={isSingleAssigning || !singlePlannerVanId}
+                className="rounded border border-blue-700 bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSingleAssigning ? 'Assigning...' : 'Add To Planner'}
               </button>
             </div>
           </section>
