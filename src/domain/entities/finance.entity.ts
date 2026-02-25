@@ -1,5 +1,5 @@
 import { BaseEntity } from './base.entity';
-import { Currency, DriverPayStatus, ExpenseCategory, ExpenseType } from '../enums';
+import { Currency, DriverPayStatus, ExpenseCategory, ExpenseRecurrence, ExpenseType } from '../enums';
 import { Van } from './van.entity';
 import { Driver } from './driver.entity';
 import { Load } from './load.entity';
@@ -13,6 +13,8 @@ export interface Expense extends BaseEntity {
   vatAmount: number | null;
   totalWithVat: number | null;
   expenseDate: string;
+  stopDate: string | null;
+  recurrenceType: ExpenseRecurrence;
   description: string | null;
   receiptUrl: string | null;
   isRecurring: boolean;

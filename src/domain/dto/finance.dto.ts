@@ -1,4 +1,4 @@
-import { Currency, DriverPayStatus, ExpenseCategory, ExpenseType } from '../enums';
+import { Currency, DriverPayStatus, ExpenseCategory, ExpenseRecurrence, ExpenseType } from '../enums';
 
 export interface CreateExpenseDto {
   category: ExpenseCategory;
@@ -9,9 +9,11 @@ export interface CreateExpenseDto {
   vatAmount?: number;
   totalWithVat?: number;
   expenseDate: string;
+  stopDate?: string | null;
   description?: string;
   receiptUrl?: string;
   isRecurring?: boolean;
+  recurrenceType?: ExpenseRecurrence;
   recurringLabel?: string;
   vendor?: string;
   referenceNumber?: string;

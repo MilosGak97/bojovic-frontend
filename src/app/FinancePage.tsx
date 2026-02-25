@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Plus, RefreshCw, X } from 'lucide-react';
 import { customIncomeApi, driverPayApi, expenseApi, loadApi, paymentApi } from '../api';
 import type { CustomIncome, DriverPayRecord, Expense, Load, PaymentRecord } from '../domain/entities';
-import { Currency, ExpenseCategory, ExpenseType, LoadStatus, PaymentStatus } from '../domain/enums';
+import {
+  Currency,
+  ExpenseCategory,
+  ExpenseRecurrence,
+  ExpenseType,
+  LoadStatus,
+  PaymentStatus,
+} from '../domain/enums';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { DateTimePicker } from './components/DateTimePicker';
 
@@ -146,6 +153,57 @@ const selectablePaymentStatuses: PaymentStatus[] = [
   PaymentStatus.WRITTEN_OFF,
 ];
 
+const FIXED_RECURRENCE_OPTIONS: Array<{ value: ExpenseRecurrence; label: string }> = [
+  { value: ExpenseRecurrence.ONE_TIME, label: 'One time' },
+  { value: ExpenseRecurrence.MONTHLY, label: 'Each month' },
+  { value: ExpenseRecurrence.WEEKLY, label: 'Every week' },
+];
+
+const FIXED_EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  ExpenseCategory.LEASING,
+  ExpenseCategory.INSURANCE,
+  ExpenseCategory.PERMITS,
+  ExpenseCategory.OFFICE,
+  ExpenseCategory.SOFTWARE,
+  ExpenseCategory.SALARY,
+  ExpenseCategory.OTHER,
+];
+
+const VARIABLE_EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  ExpenseCategory.FUEL,
+  ExpenseCategory.OFFICE,
+  ExpenseCategory.MAINTENANCE,
+  ExpenseCategory.SALARY,
+];
+
+const getExpenseCategoryLabel = (category: ExpenseCategory): string => {
+  if (category === ExpenseCategory.LEASING) return 'Leasing';
+  if (category === ExpenseCategory.INSURANCE) return 'Insurance';
+  if (category === ExpenseCategory.PERMITS) return 'Permits';
+  if (category === ExpenseCategory.OFFICE) return 'Office';
+  if (category === ExpenseCategory.SOFTWARE) return 'Software';
+  if (category === ExpenseCategory.SALARY) return 'Salary Tax';
+  if (category === ExpenseCategory.OTHER) return 'Other';
+  return category;
+};
+
+const getVariableCategoryLabel = (category: string): string => {
+  if (category === ExpenseCategory.FUEL) return 'Fuel';
+  if (category === ExpenseCategory.OFFICE) return 'Supply';
+  if (category === ExpenseCategory.MAINTENANCE) return 'Maintenance';
+  if (category === ExpenseCategory.SALARY || category === 'DRIVER_PAY') return 'Driver Wage';
+  return category;
+};
+
+const getExpenseRecurrenceLabel = (
+  recurrenceType: ExpenseRecurrence | null | undefined,
+  isRecurring?: boolean,
+): string => {
+  const normalized =
+    recurrenceType ?? (isRecurring ? ExpenseRecurrence.MONTHLY : ExpenseRecurrence.ONE_TIME);
+  return FIXED_RECURRENCE_OPTIONS.find((option) => option.value === normalized)?.label ?? 'One time';
+};
+
 const fetchAllLoads = async (): Promise<Load[]> => {
   const allLoads: Load[] = [];
   const pageSize = 200;
@@ -170,12 +228,16 @@ export default function FinancePage() {
   const [to, setTo] = useState(getDefaultToDate);
   const [includeUpcomingIncome, setIncludeUpcomingIncome] = useState(true);
   const [currentBalanceInput, setCurrentBalanceInput] = useState('0');
+  const [isCustomIncomeModalOpen, setIsCustomIncomeModalOpen] = useState(false);
+  const [isFixedExpenseModalOpen, setIsFixedExpenseModalOpen] = useState(false);
+  const [isVariableCostModalOpen, setIsVariableCostModalOpen] = useState(false);
 
   const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
   const [allPayments, setAllPayments] = useState<PaymentRecord[]>([]);
   const [allDriverPayRecords, setAllDriverPayRecords] = useState<DriverPayRecord[]>([]);
   const [allCustomIncomes, setAllCustomIncomes] = useState<CustomIncome[]>([]);
   const [allLoads, setAllLoads] = useState<Load[]>([]);
+  const [editingFixedExpense, setEditingFixedExpense] = useState<Expense | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -187,9 +249,10 @@ export default function FinancePage() {
     category: ExpenseCategory.LEASING,
     amount: '',
     dueDate: getDefaultFromDate(),
+    stopDate: '',
+    recurrenceType: ExpenseRecurrence.ONE_TIME,
     label: '',
     vendor: '',
-    recurring: true,
   });
 
   const [variableForm, setVariableForm] = useState({
@@ -208,6 +271,47 @@ export default function FinancePage() {
     referenceNumber: '',
     notes: '',
   });
+
+  const resetFixedForm = useCallback(() => {
+    setFixedForm({
+      category: ExpenseCategory.LEASING,
+      amount: '',
+      dueDate: getDefaultFromDate(),
+      stopDate: '',
+      recurrenceType: ExpenseRecurrence.ONE_TIME,
+      label: '',
+      vendor: '',
+    });
+  }, []);
+
+  const openCreateFixedExpenseModal = useCallback(() => {
+    setEditingFixedExpense(null);
+    resetFixedForm();
+    setIsFixedExpenseModalOpen(true);
+  }, [resetFixedForm]);
+
+  const openEditFixedExpenseModal = useCallback((expense: Expense) => {
+    setEditingFixedExpense(expense);
+    setFixedForm({
+      category: expense.category,
+      amount: String(toNumber(expense.amount)),
+      dueDate: toDateOnly(expense.expenseDate) || getDefaultFromDate(),
+      stopDate: toDateOnly(expense.stopDate),
+      recurrenceType:
+        expense.recurrenceType ??
+        (expense.isRecurring ? ExpenseRecurrence.MONTHLY : ExpenseRecurrence.ONE_TIME),
+      label: expense.recurringLabel ?? expense.description ?? '',
+      vendor: expense.vendor ?? '',
+    });
+    setIsFixedExpenseModalOpen(true);
+  }, []);
+
+  const fixedCategoryOptions = useMemo(() => {
+    if (FIXED_EXPENSE_CATEGORIES.includes(fixedForm.category)) {
+      return FIXED_EXPENSE_CATEGORIES;
+    }
+    return [fixedForm.category, ...FIXED_EXPENSE_CATEGORIES];
+  }, [fixedForm.category]);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -497,21 +601,59 @@ export default function FinancePage() {
     setError(null);
 
     try {
-      await expenseApi.create({
+      const isRecurring = fixedForm.recurrenceType !== ExpenseRecurrence.ONE_TIME;
+      const payload = {
         category: fixedForm.category,
         expenseType: ExpenseType.FIXED,
         amount,
         currency: Currency.EUR,
         expenseDate: fixedForm.dueDate,
+        recurrenceType: fixedForm.recurrenceType,
         ...(fixedForm.label.trim() ? { recurringLabel: fixedForm.label.trim(), description: fixedForm.label.trim() } : {}),
         ...(fixedForm.vendor.trim() ? { vendor: fixedForm.vendor.trim() } : {}),
-        isRecurring: fixedForm.recurring,
-      });
+        ...(fixedForm.stopDate ? { stopDate: fixedForm.stopDate } : { stopDate: null }),
+        isRecurring,
+      };
+
+      if (editingFixedExpense) {
+        await expenseApi.update(editingFixedExpense.id, payload);
+      } else {
+        await expenseApi.create(payload);
+      }
 
       setFixedForm((prev) => ({ ...prev, amount: '', label: '', vendor: '' }));
+      setIsFixedExpenseModalOpen(false);
+      setEditingFixedExpense(null);
       await loadData();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to add fixed expense.');
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : editingFixedExpense
+            ? 'Failed to update fixed expense.'
+            : 'Failed to add fixed expense.',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteFixedExpense = async () => {
+    if (!editingFixedExpense) return;
+    const confirmed = window.confirm('Hard delete this fixed expense? This action cannot be undone.');
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      await expenseApi.delete(editingFixedExpense.id);
+      setIsFixedExpenseModalOpen(false);
+      setEditingFixedExpense(null);
+      resetFixedForm();
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to delete fixed expense.');
     } finally {
       setIsSubmitting(false);
     }
@@ -534,12 +676,14 @@ export default function FinancePage() {
         amount,
         currency: Currency.EUR,
         expenseDate: variableForm.date,
+        recurrenceType: ExpenseRecurrence.ONE_TIME,
         ...(variableForm.label.trim() ? { description: variableForm.label.trim() } : {}),
         ...(variableForm.vendor.trim() ? { vendor: variableForm.vendor.trim() } : {}),
         isRecurring: false,
       });
 
       setVariableForm((prev) => ({ ...prev, amount: '', label: '', vendor: '' }));
+      setIsVariableCostModalOpen(false);
       await loadData();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to add variable expense.');
@@ -591,26 +735,10 @@ export default function FinancePage() {
         referenceNumber: '',
         notes: '',
       }));
+      setIsCustomIncomeModalOpen(false);
       await loadData();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Failed to add custom income.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDeleteCustomIncome = async (id: string) => {
-    const confirmed = window.confirm('Delete this custom income row?');
-    if (!confirmed) return;
-
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      await customIncomeApi.delete(id);
-      await loadData();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to delete custom income.');
     } finally {
       setIsSubmitting(false);
     }
@@ -769,83 +897,27 @@ export default function FinancePage() {
         {activeTab === 'CASH_FLOW' && (
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-start">
         <section className="order-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
-          <h2 className="text-sm font-semibold text-slate-900">3. Fixed Expenses</h2>
-
-          <div className="mt-3 grid gap-2 md:grid-cols-6">
-            <select
-              value={fixedForm.category}
-              onChange={(event) =>
-                setFixedForm((prev) => ({ ...prev, category: event.target.value as ExpenseCategory }))
-              }
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            >
-              {Object.values(ExpenseCategory).map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="Amount"
-              value={fixedForm.amount}
-              onChange={(event) => setFixedForm((prev) => ({ ...prev, amount: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <DateTimePicker
-              mode="date"
-              value={fixedForm.dueDate}
-              onChange={(value) => setFixedForm((prev) => ({ ...prev, dueDate: value }))}
-              triggerClassName="mt-0"
-            />
-
-            <input
-              type="text"
-              placeholder="Label (Lease, Base Pay...)"
-              value={fixedForm.label}
-              onChange={(event) => setFixedForm((prev) => ({ ...prev, label: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <input
-              type="text"
-              placeholder="Vendor"
-              value={fixedForm.vendor}
-              onChange={(event) => setFixedForm((prev) => ({ ...prev, vendor: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">3. Fixed Expenses</h2>
             <button
               type="button"
-              onClick={() => void handleAddFixedExpense()}
-              disabled={isSubmitting}
-              className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              onClick={openCreateFixedExpenseModal}
+              className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             >
-              <Plus className="h-3.5 w-3.5" />
-              Add Fixed
+              <Plus className="h-3 w-3" />
+              Add Fixed Expense
             </button>
           </div>
-
-          <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              checked={fixedForm.recurring}
-              onChange={(event) => setFixedForm((prev) => ({ ...prev, recurring: event.target.checked }))}
-              className="h-4 w-4 rounded border-slate-300"
-            />
-            Recurring monthly
-          </label>
 
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-2 py-1">Due Date</th>
+                  <th className="px-2 py-1">Stop Date</th>
                   <th className="px-2 py-1">Label</th>
                   <th className="px-2 py-1">Category</th>
-                  <th className="px-2 py-1">Recurring</th>
+                  <th className="px-2 py-1">Recurrence</th>
                   <th className="px-2 py-1">Vendor</th>
                   <th className="px-2 py-1 text-right">Amount</th>
                 </tr>
@@ -853,7 +925,7 @@ export default function FinancePage() {
               <tbody>
                 {fixedExpenses.length === 0 && (
                   <tr>
-                    <td className="px-2 py-3 text-slate-500" colSpan={6}>
+                    <td className="px-2 py-3 text-slate-500" colSpan={7}>
                       {isLoading ? 'Loading...' : 'No fixed expenses in selected range.'}
                     </td>
                   </tr>
@@ -862,13 +934,23 @@ export default function FinancePage() {
                   .slice()
                   .sort((a, b) => (a.expenseDate < b.expenseDate ? 1 : -1))
                   .map((expense) => (
-                    <tr key={expense.id} className="border-t border-slate-100">
+                    <tr
+                      key={expense.id}
+                      className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
+                      onClick={() => openEditFixedExpenseModal(expense)}
+                      title="Click to edit fixed expense"
+                    >
                       <td className="px-2 py-1.5 text-slate-700">{formatDateCell(expense.expenseDate)}</td>
+                      <td className="px-2 py-1.5 text-slate-700">
+                        {expense.stopDate ? formatDateCell(toDateOnly(expense.stopDate)) : '—'}
+                      </td>
                       <td className="px-2 py-1.5 font-medium text-slate-800">
                         {expense.recurringLabel ?? expense.description ?? expense.category}
                       </td>
-                      <td className="px-2 py-1.5 text-slate-700">{expense.category}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{expense.isRecurring ? 'Yes' : 'No'}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{getExpenseCategoryLabel(expense.category)}</td>
+                      <td className="px-2 py-1.5 text-slate-700">
+                        {getExpenseRecurrenceLabel(expense.recurrenceType, expense.isRecurring)}
+                      </td>
                       <td className="px-2 py-1.5 text-slate-700">{expense.vendor ?? '—'}</td>
                       <td className="px-2 py-1.5 text-right text-slate-800">
                         {formatMoney(toNumber(expense.totalWithVat ?? expense.amount))}
@@ -881,11 +963,17 @@ export default function FinancePage() {
         </section>
 
         <section className="order-1 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
-          <h2 className="text-sm font-semibold text-slate-900">1. Upcoming Income</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Read-only from load payment lifecycle. Use the load payment page for payment workflow updates.
-          </p>
-
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">1. Upcoming Income</h2>
+            <button
+              type="button"
+              onClick={() => setIsCustomIncomeModalOpen(true)}
+              className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <Plus className="h-3 w-3" />
+              Add Custom Income
+            </button>
+          </div>
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
@@ -939,183 +1027,18 @@ export default function FinancePage() {
             </table>
           </div>
 
-          <div className="mt-5 border-t border-slate-200 pt-4">
-            <h3 className="text-sm font-semibold text-slate-900">Custom Income</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Manual entries not linked to loads (capital injection, refunds, misc income).
-            </p>
-
-            <div className="mt-3 grid gap-2 md:grid-cols-6">
-              <input
-                type="text"
-                placeholder="Description"
-                value={customIncomeForm.description}
-                onChange={(event) =>
-                  setCustomIncomeForm((prev) => ({ ...prev, description: event.target.value }))
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 md:col-span-2"
-              />
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Amount"
-                value={customIncomeForm.amount}
-                onChange={(event) =>
-                  setCustomIncomeForm((prev) => ({ ...prev, amount: event.target.value }))
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-              />
-              <DateTimePicker
-                mode="date"
-                value={customIncomeForm.incomeDate}
-                onChange={(value) =>
-                  setCustomIncomeForm((prev) => ({ ...prev, incomeDate: value }))
-                }
-                triggerClassName="mt-0"
-              />
-              <input
-                type="text"
-                placeholder="Category (optional)"
-                value={customIncomeForm.category}
-                onChange={(event) =>
-                  setCustomIncomeForm((prev) => ({ ...prev, category: event.target.value }))
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-              />
-              <input
-                type="text"
-                placeholder="Reference (optional)"
-                value={customIncomeForm.referenceNumber}
-                onChange={(event) =>
-                  setCustomIncomeForm((prev) => ({ ...prev, referenceNumber: event.target.value }))
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-              />
-              <button
-                type="button"
-                onClick={() => void handleAddCustomIncome()}
-                disabled={isSubmitting}
-                className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60 md:col-span-1"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add Income
-              </button>
-            </div>
-
-            <textarea
-              placeholder="Notes (optional)"
-              value={customIncomeForm.notes}
-              onChange={(event) =>
-                setCustomIncomeForm((prev) => ({ ...prev, notes: event.target.value }))
-              }
-              className="mt-2 min-h-16 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <div className="mt-3 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-2 py-1">Date</th>
-                    <th className="px-2 py-1">Description</th>
-                    <th className="px-2 py-1">Category</th>
-                    <th className="px-2 py-1">Reference</th>
-                    <th className="px-2 py-1 text-right">Amount</th>
-                    <th className="px-2 py-1 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {customIncomesInRange.length === 0 && (
-                    <tr>
-                      <td className="px-2 py-3 text-slate-500" colSpan={6}>
-                        {isLoading ? 'Loading...' : 'No custom income rows in selected range.'}
-                      </td>
-                    </tr>
-                  )}
-                  {customIncomesInRange.map((income) => (
-                    <tr key={income.id} className="border-t border-slate-100">
-                      <td className="px-2 py-1.5 text-slate-700">{formatDateCell(toDateOnly(income.incomeDate))}</td>
-                      <td className="px-2 py-1.5 text-slate-800">{income.description}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{income.category ?? '—'}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{income.referenceNumber ?? '—'}</td>
-                      <td className="px-2 py-1.5 text-right font-semibold text-emerald-700">
-                        {formatMoney(toNumber(income.amount))}
-                      </td>
-                      <td className="px-2 py-1.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteCustomIncome(income.id)}
-                          className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                          title="Delete custom income"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </section>
 
         <section className="order-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
-          <h2 className="text-sm font-semibold text-slate-900">2. Variable Costs</h2>
-
-          <div className="mt-3 grid gap-2 md:grid-cols-6">
-            <select
-              value={variableForm.category}
-              onChange={(event) =>
-                setVariableForm((prev) => ({ ...prev, category: event.target.value as ExpenseCategory }))
-              }
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            >
-              {Object.values(ExpenseCategory).map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="Amount"
-              value={variableForm.amount}
-              onChange={(event) => setVariableForm((prev) => ({ ...prev, amount: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <DateTimePicker
-              mode="date"
-              value={variableForm.date}
-              onChange={(value) => setVariableForm((prev) => ({ ...prev, date: value }))}
-              triggerClassName="mt-0"
-            />
-
-            <input
-              type="text"
-              placeholder="Label"
-              value={variableForm.label}
-              onChange={(event) => setVariableForm((prev) => ({ ...prev, label: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
-            <input
-              type="text"
-              placeholder="Vendor"
-              value={variableForm.vendor}
-              onChange={(event) => setVariableForm((prev) => ({ ...prev, vendor: event.target.value }))}
-              className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-            />
-
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">2. Variable Costs</h2>
             <button
               type="button"
-              onClick={() => void handleAddVariableExpense()}
-              disabled={isSubmitting}
-              className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              onClick={() => setIsVariableCostModalOpen(true)}
+              className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             >
-              <Plus className="h-3.5 w-3.5" />
-              Add Variable
+              <Plus className="h-3 w-3" />
+              Add Variable Cost
             </button>
           </div>
 
@@ -1140,13 +1063,13 @@ export default function FinancePage() {
                   </tr>
                 )}
                 {variableCostRows.map((row) => (
-                  <tr key={row.id} className="border-t border-slate-100">
-                    <td className="px-2 py-1.5 text-slate-700">{formatDateCell(row.date)}</td>
-                    <td className="px-2 py-1.5 text-slate-700">{row.source}</td>
-                    <td className="px-2 py-1.5 text-slate-700">{row.category}</td>
-                    <td className="px-2 py-1.5 text-slate-800">{row.label}</td>
-                    <td className="px-2 py-1.5 text-slate-700">{row.status}</td>
-                    <td className="px-2 py-1.5 text-right font-medium text-slate-900">{formatMoney(row.amount)}</td>
+                    <tr key={row.id} className="border-t border-slate-100">
+                      <td className="px-2 py-1.5 text-slate-700">{formatDateCell(row.date)}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{row.source}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{getVariableCategoryLabel(row.category)}</td>
+                      <td className="px-2 py-1.5 text-slate-800">{row.label}</td>
+                      <td className="px-2 py-1.5 text-slate-700">{row.status}</td>
+                      <td className="px-2 py-1.5 text-right font-medium text-slate-900">{formatMoney(row.amount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1365,6 +1288,400 @@ export default function FinancePage() {
           </section>
         )}
       </div>
+
+      {isFixedExpenseModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
+          onClick={() => {
+            if (!isSubmitting) {
+              setIsFixedExpenseModalOpen(false);
+              setEditingFixedExpense(null);
+            }
+          }}
+        >
+          <section
+            className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">
+                {editingFixedExpense ? 'Edit Fixed Expense' : 'Add Fixed Expense'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFixedExpenseModalOpen(false);
+                  setEditingFixedExpense(null);
+                }}
+                disabled={isSubmitting}
+                className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                title="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <label className="text-xs text-slate-600">
+                Category
+                <select
+                  value={fixedForm.category}
+                  onChange={(event) =>
+                    setFixedForm((prev) => ({ ...prev, category: event.target.value as ExpenseCategory }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                >
+                  {fixedCategoryOptions.map((category) => (
+                    <option key={category} value={category}>
+                      {getExpenseCategoryLabel(category)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-slate-600">
+                Amount
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Amount"
+                  value={fixedForm.amount}
+                  onChange={(event) => setFixedForm((prev) => ({ ...prev, amount: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Due Date
+                <DateTimePicker
+                  mode="date"
+                  value={fixedForm.dueDate}
+                  onChange={(value) => setFixedForm((prev) => ({ ...prev, dueDate: value }))}
+                  triggerClassName="mt-1"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Stop Date (optional)
+                <DateTimePicker
+                  mode="date"
+                  value={fixedForm.stopDate}
+                  onChange={(value) => setFixedForm((prev) => ({ ...prev, stopDate: value }))}
+                  triggerClassName="mt-1"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Repeat
+                <select
+                  value={fixedForm.recurrenceType}
+                  onChange={(event) =>
+                    setFixedForm((prev) => ({
+                      ...prev,
+                      recurrenceType: event.target.value as ExpenseRecurrence,
+                    }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                >
+                  {FIXED_RECURRENCE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-slate-600">
+                Label
+                <input
+                  type="text"
+                  placeholder="Lease, Base Pay..."
+                  value={fixedForm.label}
+                  onChange={(event) => setFixedForm((prev) => ({ ...prev, label: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600 md:col-span-2">
+                Vendor
+                <input
+                  type="text"
+                  placeholder="Vendor"
+                  value={fixedForm.vendor}
+                  onChange={(event) => setFixedForm((prev) => ({ ...prev, vendor: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <div>
+                {editingFixedExpense && (
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteFixedExpense()}
+                    disabled={isSubmitting}
+                    className="rounded border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                  >
+                    Hard Delete
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFixedExpenseModalOpen(false);
+                    setEditingFixedExpense(null);
+                  }}
+                  disabled={isSubmitting}
+                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAddFixedExpense()}
+                  disabled={isSubmitting}
+                  className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {editingFixedExpense ? 'Save Fixed Expense' : 'Add Fixed Expense'}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isVariableCostModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
+          onClick={() => {
+            if (!isSubmitting) setIsVariableCostModalOpen(false);
+          }}
+        >
+          <section
+            className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Add Variable Cost</h3>
+              <button
+                type="button"
+                onClick={() => setIsVariableCostModalOpen(false)}
+                disabled={isSubmitting}
+                className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                title="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <label className="text-xs text-slate-600">
+                Category
+                <select
+                  value={variableForm.category}
+                  onChange={(event) =>
+                    setVariableForm((prev) => ({ ...prev, category: event.target.value as ExpenseCategory }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                >
+                  {VARIABLE_EXPENSE_CATEGORIES.map((category) => (
+                    <option key={category} value={category}>
+                      {getVariableCategoryLabel(category)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-slate-600">
+                Amount
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Amount"
+                  value={variableForm.amount}
+                  onChange={(event) => setVariableForm((prev) => ({ ...prev, amount: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Date
+                <DateTimePicker
+                  mode="date"
+                  value={variableForm.date}
+                  onChange={(value) => setVariableForm((prev) => ({ ...prev, date: value }))}
+                  triggerClassName="mt-1"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Label
+                <input
+                  type="text"
+                  placeholder="Label"
+                  value={variableForm.label}
+                  onChange={(event) => setVariableForm((prev) => ({ ...prev, label: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600 md:col-span-2">
+                Vendor
+                <input
+                  type="text"
+                  placeholder="Vendor"
+                  value={variableForm.vendor}
+                  onChange={(event) => setVariableForm((prev) => ({ ...prev, vendor: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsVariableCostModalOpen(false)}
+                disabled={isSubmitting}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleAddVariableExpense()}
+                disabled={isSubmitting}
+                className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Variable Cost
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isCustomIncomeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
+          onClick={() => {
+            if (!isSubmitting) setIsCustomIncomeModalOpen(false);
+          }}
+        >
+          <section
+            className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Add Custom Income</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Manual entry not linked to a load.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCustomIncomeModalOpen(false)}
+                disabled={isSubmitting}
+                className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                title="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <label className="text-xs text-slate-600 md:col-span-2">
+                Description
+                <input
+                  type="text"
+                  placeholder="Description"
+                  value={customIncomeForm.description}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Amount
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Amount"
+                  value={customIncomeForm.amount}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, amount: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Date
+                <DateTimePicker
+                  mode="date"
+                  value={customIncomeForm.incomeDate}
+                  onChange={(value) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, incomeDate: value }))
+                  }
+                  triggerClassName="mt-1"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Category (optional)
+                <input
+                  type="text"
+                  placeholder="Category"
+                  value={customIncomeForm.category}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, category: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Reference (optional)
+                <input
+                  type="text"
+                  placeholder="Reference"
+                  value={customIncomeForm.referenceNumber}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, referenceNumber: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600 md:col-span-2">
+                Notes (optional)
+                <textarea
+                  placeholder="Notes"
+                  value={customIncomeForm.notes}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, notes: event.target.value }))
+                  }
+                  className="mt-1 min-h-20 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCustomIncomeModalOpen(false)}
+                disabled={isSubmitting}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleAddCustomIncome()}
+                disabled={isSubmitting}
+                className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Income
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

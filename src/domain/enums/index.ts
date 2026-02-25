@@ -172,6 +172,12 @@ export enum ExpenseType {
   TRIP_LINKED = 'TRIP_LINKED',
 }
 
+export enum ExpenseRecurrence {
+  ONE_TIME = 'ONE_TIME',
+  MONTHLY = 'MONTHLY',
+  WEEKLY = 'WEEKLY',
+}
+
 export enum DriverPayStatus {
   PENDING = 'PENDING',
   PAID = 'PAID',
