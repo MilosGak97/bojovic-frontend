@@ -20,6 +20,8 @@ import {
 } from '../domain/enums';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { DateTimePicker } from './components/DateTimePicker';
+import { ComposeEmailModal } from './components/ComposeEmailModal';
+import { EmailLogPanel } from './components/EmailLogPanel';
 
 type LoadDetailSection =
   | 'overview'
@@ -30,7 +32,8 @@ type LoadDetailSection =
   | 'documents'
   | 'stops'
   | 'freight'
-  | 'contacts';
+  | 'contacts'
+  | 'emails';
 
 type ActivityKind = 'LOAD' | 'STOP' | 'PAYMENT' | 'DOCUMENT';
 type ActivityFilter = 'ALL' | ActivityKind;
@@ -132,6 +135,7 @@ const SECTION_ITEMS: Array<{ id: LoadDetailSection; label: string }> = [
   { id: 'stops', label: 'Stops' },
   { id: 'freight', label: 'Freight' },
   { id: 'contacts', label: 'Contacts' },
+  { id: 'emails', label: 'Emails' },
 ];
 
 const CONTACT_ROLE_OPTIONS: ContactRole[] = [
@@ -516,6 +520,7 @@ export default function LoadDetailPage() {
   const [isNewBrokerContactFormOpen, setIsNewBrokerContactFormOpen] = useState(false);
   const [isChangeBrokerModalOpen, setIsChangeBrokerModalOpen] = useState(false);
   const [brokerEditModal, setBrokerEditModal] = useState<BrokerEditModalSection | null>(null);
+  const [showComposeEmail, setShowComposeEmail] = useState(false);
   const [isSavingBrokerSection, setIsSavingBrokerSection] = useState<
     null | 'main' | 'transEu' | 'other'
   >(null);
@@ -3183,6 +3188,36 @@ export default function LoadDetailPage() {
                   </p>
                   <p className="mt-1 text-xs text-slate-600">{load?.deliveryAddress ?? '—'}</p>
                 </article>
+              </div>
+            )}
+
+            {activeSection === 'emails' && load && (
+              <div>
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-slate-900">Emails</h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowComposeEmail(true)}
+                    className="flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                  >
+                    Send Email
+                  </button>
+                </div>
+                <EmailLogPanel relatedEntityType="LOAD" relatedEntityId={load.id} />
+                <ComposeEmailModal
+                  isOpen={showComposeEmail}
+                  onClose={() => setShowComposeEmail(false)}
+                  defaultTo={load.contactEmail ? [load.contactEmail] : undefined}
+                  relatedEntityType="LOAD"
+                  relatedEntityId={load.id}
+                  templateVariables={{
+                    referenceNumber: load.referenceNumber,
+                    brokerName: load.broker?.companyName ?? load.brokerageName ?? '',
+                    pickupCity: load.pickupCity,
+                    deliveryCity: load.deliveryCity,
+                    contactPerson: load.contactPerson ?? '',
+                  }}
+                />
               </div>
             )}
           </section>

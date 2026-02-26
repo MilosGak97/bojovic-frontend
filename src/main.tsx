@@ -9,6 +9,7 @@ import TripsPage from './app/TripsPage.tsx';
 import HomePage from './app/HomePage.tsx';
 import LoadDetailPage from './app/LoadDetailPage.tsx';
 import LoadBoardPage from './app/LoadBoardPage.tsx';
+import SettingsPage from './app/SettingsPage.tsx';
 import ModulePlaceholderPage from './app/ModulePlaceholderPage.tsx';
 import { dashboardModules } from './app/modules';
 import './styles/index.css';
@@ -24,6 +25,7 @@ createRoot(document.getElementById('root')!).render(
       <Route path="/drivers" element={<DriversPage />} />
       <Route path="/trips" element={<TripsPage />} />
       <Route path="/finance" element={<FinancePage />} />
+      <Route path="/settings" element={<SettingsPage />} />
       {dashboardModules
         .filter((module) => !module.ready)
         .map((module) => (

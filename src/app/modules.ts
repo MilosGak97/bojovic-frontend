@@ -60,4 +60,10 @@ export const dashboardModules: ModuleDefinition[] = [
     description: 'Track expenses, driver payroll, and profitability reports.',
     ready: true,
   },
+  {
+    title: 'Settings',
+    path: '/settings',
+    description: 'Email accounts, templates, and system configuration.',
+    ready: true,
+  },
 ];

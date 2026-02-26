@@ -44,7 +44,9 @@ export type UpdateDriverPayRecordDto = Partial<CreateDriverPayRecordDto>;
 export interface CreateCustomIncomeDto {
   amount: number;
   currency?: Currency;
-  incomeDate: string;
+  dueDay: number;
+  incomeDate?: string;
+  stopDate?: string;
   description: string;
   category?: string;
   referenceNumber?: string;

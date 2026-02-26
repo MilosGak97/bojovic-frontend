@@ -28,3 +28,4 @@ export type {
   VanCostSummary,
   MonthlyPnLItem,
 } from './finance.entity';
+export type { EmailAccount, EmailLog, EmailTemplate } from './email.entity';

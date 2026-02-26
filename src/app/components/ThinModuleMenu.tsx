@@ -11,6 +11,7 @@ const QUICK_NAV_ITEMS = [
   { label: 'Broker Desk', to: '/broker-desk' },
   { label: 'Payments', to: '/payments' },
   { label: 'Finance', to: '/finance' },
+  { label: 'Settings', to: '/settings' },
 ];
 
 export function ThinModuleMenu() {

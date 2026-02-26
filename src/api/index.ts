@@ -19,6 +19,9 @@ import type {
   LoadProfit,
   VanCostSummary,
   MonthlyPnLItem,
+  EmailAccount,
+  EmailLog,
+  EmailTemplate,
 } from '../domain/entities';
 import type { PaginatedResponse } from '../domain/types';
 import type {
@@ -38,6 +41,10 @@ import type {
   CreateDriverPayRecordDto,
   UpdateDriverPayRecordDto,
   CreateCustomIncomeDto,
+  ConnectEmailAccountDto,
+  SendEmailDto,
+  CreateEmailTemplateDto,
+  UpdateEmailTemplateDto,
 } from '../domain/dto';
 
 // ─── Loads ──────────────────────────────────────────────
@@ -268,4 +275,30 @@ export const financeReportApi = {
     ),
   getMonthlyPnL: (year: number) =>
     api.get<MonthlyPnLItem[]>(`/finance/reports/monthly-pnl?year=${year}`),
+};
+
+// ─── Email ─────────────────────────────────────────────
+export const emailApi = {
+  connectAccount: (data: ConnectEmailAccountDto) =>
+    api.post<{ authUrl: string }>('/email/accounts/connect', data),
+  getAccounts: () => api.get<EmailAccount[]>('/email/accounts'),
+  deleteAccount: (id: string) => api.delete(`/email/accounts/${id}`),
+  disconnectAccount: (id: string) => api.patch<EmailAccount>(`/email/accounts/${id}/disconnect`, {}),
+  send: (data: SendEmailDto) => api.post<EmailLog>('/email/send', data),
+  getLogs: (params?: { accountId?: string; relatedEntityType?: string; relatedEntityId?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.accountId) query.set('accountId', params.accountId);
+    if (params?.relatedEntityType) query.set('relatedEntityType', params.relatedEntityType);
+    if (params?.relatedEntityId) query.set('relatedEntityId', params.relatedEntityId);
+    const qs = query.toString();
+    return api.get<EmailLog[]>(`/email/logs${qs ? `?${qs}` : ''}`);
+  },
+  getTemplates: () => api.get<EmailTemplate[]>('/email/templates'),
+  getTemplate: (id: string) => api.get<EmailTemplate>(`/email/templates/${id}`),
+  createTemplate: (data: CreateEmailTemplateDto) => api.post<EmailTemplate>('/email/templates', data),
+  updateTemplate: (id: string, data: UpdateEmailTemplateDto) =>
+    api.put<EmailTemplate>(`/email/templates/${id}`, data),
+  deleteTemplate: (id: string) => api.delete(`/email/templates/${id}`),
+  renderTemplate: (id: string, variables: Record<string, string>) =>
+    api.post<{ subject: string; body: string }>(`/email/templates/${id}/render`, variables),
 };

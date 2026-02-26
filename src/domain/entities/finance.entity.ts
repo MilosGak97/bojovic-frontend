@@ -52,6 +52,8 @@ export interface CustomIncome extends BaseEntity {
   amount: number;
   currency: Currency;
   incomeDate: string;
+  dueDay: number;
+  stopDate: string | null;
   description: string;
   category: string | null;
   referenceNumber: string | null;

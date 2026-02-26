@@ -24,3 +24,9 @@ export type {
   CreateCustomIncomeDto,
   UpdateCustomIncomeDto,
 } from './finance.dto';
+export type {
+  ConnectEmailAccountDto,
+  SendEmailDto,
+  CreateEmailTemplateDto,
+  UpdateEmailTemplateDto,
+} from './email.dto';

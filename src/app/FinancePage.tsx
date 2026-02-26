@@ -35,6 +35,7 @@ type VariableCostRow = {
 };
 
 type FinanceTab = 'CASH_FLOW' | 'LOAD_PAYMENTS';
+type SimulationView = 'COMBINED' | 'VARIABLE_ONLY' | 'UPCOMING_INCOME_ONLY';
 
 type LoadPaymentFilter = 'ALL' | 'TAKEN' | 'COMPLETED' | 'PAID' | 'PAYMENT_SCHEDULED';
 
@@ -56,6 +57,12 @@ const LOAD_PAYMENT_FILTERS: Array<{ id: LoadPaymentFilter; label: string }> = [
   { id: 'PAYMENT_SCHEDULED', label: 'Payment Scheduled' },
   { id: 'PAID', label: 'Paid' },
   { id: 'ALL', label: 'All' },
+];
+
+const SIMULATION_VIEW_OPTIONS: Array<{ id: SimulationView; label: string }> = [
+  { id: 'COMBINED', label: 'Combined' },
+  { id: 'VARIABLE_ONLY', label: 'Variable Cost' },
+  { id: 'UPCOMING_INCOME_ONLY', label: 'Upcoming Income' },
 ];
 
 const toDateInput = (value: Date): string => value.toISOString().slice(0, 10);
@@ -84,13 +91,7 @@ const moneyFormatter = new Intl.NumberFormat('de-DE', {
   maximumFractionDigits: 2,
 });
 
-const numberFormatter = new Intl.NumberFormat('de-DE', {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-});
-
 const formatMoney = (value: number): string => moneyFormatter.format(toNumber(value));
-const formatNumber = (value: number): string => numberFormatter.format(toNumber(value));
 
 const toDateOnly = (value?: string | null): string => {
   if (!value) return '';
@@ -153,12 +154,6 @@ const selectablePaymentStatuses: PaymentStatus[] = [
   PaymentStatus.WRITTEN_OFF,
 ];
 
-const FIXED_RECURRENCE_OPTIONS: Array<{ value: ExpenseRecurrence; label: string }> = [
-  { value: ExpenseRecurrence.ONE_TIME, label: 'One time' },
-  { value: ExpenseRecurrence.MONTHLY, label: 'Each month' },
-  { value: ExpenseRecurrence.WEEKLY, label: 'Every week' },
-];
-
 const FIXED_EXPENSE_CATEGORIES: ExpenseCategory[] = [
   ExpenseCategory.LEASING,
   ExpenseCategory.INSURANCE,
@@ -195,13 +190,98 @@ const getVariableCategoryLabel = (category: string): string => {
   return category;
 };
 
-const getExpenseRecurrenceLabel = (
-  recurrenceType: ExpenseRecurrence | null | undefined,
-  isRecurring?: boolean,
-): string => {
-  const normalized =
-    recurrenceType ?? (isRecurring ? ExpenseRecurrence.MONTHLY : ExpenseRecurrence.ONE_TIME);
-  return FIXED_RECURRENCE_OPTIONS.find((option) => option.value === normalized)?.label ?? 'One time';
+const getDefaultDueDay = (): string => String(new Date().getDate());
+const pad = (value: number): string => String(value).padStart(2, '0');
+
+const getDueDayFromDate = (value?: string | null): string => {
+  if (!value) return getDefaultDueDay();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return getDefaultDueDay();
+  return String(parsed.getDate());
+};
+
+const toMonthlyAnchorDate = (dayInMonth: number, referenceDate?: string | null): string => {
+  const base = referenceDate ? new Date(referenceDate) : new Date();
+  const safeBase = Number.isNaN(base.getTime()) ? new Date() : base;
+  const year = safeBase.getFullYear();
+  const month = safeBase.getMonth();
+  const maxDay = new Date(year, month + 1, 0).getDate();
+  const normalizedDay = Math.min(Math.max(Math.round(dayInMonth), 1), maxDay);
+  return `${year}-${pad(month + 1)}-${pad(normalizedDay)}`;
+};
+
+const getMonthStart = (dateKey: string): Date => {
+  const base = new Date(`${dateKey}T00:00:00.000Z`);
+  return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1));
+};
+
+const addUtcMonths = (value: Date, months: number): Date =>
+  new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + months, 1));
+
+const getOccurrenceDateKey = (monthStart: Date, dueDay: number): string => {
+  const year = monthStart.getUTCFullYear();
+  const month = monthStart.getUTCMonth();
+  const maxDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const safeDay = Math.min(Math.max(Math.round(dueDay), 1), maxDay);
+  return `${year}-${pad(month + 1)}-${pad(safeDay)}`;
+};
+
+const getIncomeDueDay = (income: CustomIncome): number => {
+  const parsed = Math.trunc(toNumber(income.dueDay));
+  if (parsed >= 1 && parsed <= 31) return parsed;
+  const fallback = getDueDayFromDate(income.incomeDate);
+  return Math.min(Math.max(Math.trunc(toNumber(fallback)), 1), 31);
+};
+
+type RecurringCustomIncomeOccurrence = {
+  id: string;
+  incomeId: string;
+  date: string;
+  label: string;
+  amount: number;
+};
+
+const expandRecurringCustomIncome = (
+  templates: CustomIncome[],
+  from: string,
+  to: string,
+): RecurringCustomIncomeOccurrence[] => {
+  const result: RecurringCustomIncomeOccurrence[] = [];
+
+  templates.forEach((income) => {
+    const dueDay = getIncomeDueDay(income);
+    const amount = toNumber(income.amount);
+    if (amount <= 0) return;
+
+    const startDate = toDateOnly(income.incomeDate) || from;
+    const stopDate = toDateOnly(income.stopDate);
+    if (startDate > to) return;
+    if (stopDate && stopDate < from) return;
+
+    let monthCursor = getMonthStart(startDate);
+    const monthEnd = getMonthStart(stopDate && stopDate < to ? stopDate : to);
+
+    while (monthCursor <= monthEnd) {
+      const occurrenceDate = getOccurrenceDateKey(monthCursor, dueDay);
+      if (
+        occurrenceDate >= from &&
+        occurrenceDate <= to &&
+        occurrenceDate >= startDate &&
+        (!stopDate || occurrenceDate <= stopDate)
+      ) {
+        result.push({
+          id: `${income.id}-${occurrenceDate}`,
+          incomeId: income.id,
+          date: occurrenceDate,
+          label: income.description,
+          amount,
+        });
+      }
+      monthCursor = addUtcMonths(monthCursor, 1);
+    }
+  });
+
+  return result.sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date)));
 };
 
 const fetchAllLoads = async (): Promise<Load[]> => {
@@ -226,7 +306,7 @@ export default function FinancePage() {
   const [loadPaymentFilter, setLoadPaymentFilter] = useState<LoadPaymentFilter>('COMPLETED');
   const [from, setFrom] = useState(getDefaultFromDate);
   const [to, setTo] = useState(getDefaultToDate);
-  const [includeUpcomingIncome, setIncludeUpcomingIncome] = useState(true);
+  const [simulationView, setSimulationView] = useState<SimulationView>('COMBINED');
   const [currentBalanceInput, setCurrentBalanceInput] = useState('0');
   const [isCustomIncomeModalOpen, setIsCustomIncomeModalOpen] = useState(false);
   const [isFixedExpenseModalOpen, setIsFixedExpenseModalOpen] = useState(false);
@@ -238,9 +318,11 @@ export default function FinancePage() {
   const [allCustomIncomes, setAllCustomIncomes] = useState<CustomIncome[]>([]);
   const [allLoads, setAllLoads] = useState<Load[]>([]);
   const [editingFixedExpense, setEditingFixedExpense] = useState<Expense | null>(null);
+  const [editingFixedIncome, setEditingFixedIncome] = useState<CustomIncome | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingFixedIncomeId, setDeletingFixedIncomeId] = useState<string | null>(null);
   const [updatingLoadStatusId, setUpdatingLoadStatusId] = useState<string | null>(null);
   const [updatingPaymentLoadId, setUpdatingPaymentLoadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -248,9 +330,8 @@ export default function FinancePage() {
   const [fixedForm, setFixedForm] = useState({
     category: ExpenseCategory.LEASING,
     amount: '',
-    dueDate: getDefaultFromDate(),
+    dueDay: getDefaultDueDay(),
     stopDate: '',
-    recurrenceType: ExpenseRecurrence.ONE_TIME,
     label: '',
     vendor: '',
   });
@@ -266,19 +347,31 @@ export default function FinancePage() {
   const [customIncomeForm, setCustomIncomeForm] = useState({
     description: '',
     amount: '',
-    incomeDate: getDefaultFromDate(),
+    dueDay: getDefaultDueDay(),
+    stopDate: '',
     category: '',
     referenceNumber: '',
     notes: '',
   });
 
+  const resetCustomIncomeForm = useCallback(() => {
+    setCustomIncomeForm({
+      description: '',
+      amount: '',
+      dueDay: getDefaultDueDay(),
+      stopDate: '',
+      category: '',
+      referenceNumber: '',
+      notes: '',
+    });
+  }, []);
+
   const resetFixedForm = useCallback(() => {
     setFixedForm({
       category: ExpenseCategory.LEASING,
       amount: '',
-      dueDate: getDefaultFromDate(),
+      dueDay: getDefaultDueDay(),
       stopDate: '',
-      recurrenceType: ExpenseRecurrence.ONE_TIME,
       label: '',
       vendor: '',
     });
@@ -295,15 +388,32 @@ export default function FinancePage() {
     setFixedForm({
       category: expense.category,
       amount: String(toNumber(expense.amount)),
-      dueDate: toDateOnly(expense.expenseDate) || getDefaultFromDate(),
+      dueDay: getDueDayFromDate(expense.expenseDate),
       stopDate: toDateOnly(expense.stopDate),
-      recurrenceType:
-        expense.recurrenceType ??
-        (expense.isRecurring ? ExpenseRecurrence.MONTHLY : ExpenseRecurrence.ONE_TIME),
       label: expense.recurringLabel ?? expense.description ?? '',
       vendor: expense.vendor ?? '',
     });
     setIsFixedExpenseModalOpen(true);
+  }, []);
+
+  const openCreateFixedIncomeModal = useCallback(() => {
+    setEditingFixedIncome(null);
+    resetCustomIncomeForm();
+    setIsCustomIncomeModalOpen(true);
+  }, [resetCustomIncomeForm]);
+
+  const openEditFixedIncomeModal = useCallback((income: CustomIncome) => {
+    setEditingFixedIncome(income);
+    setCustomIncomeForm({
+      description: income.description ?? '',
+      amount: String(toNumber(income.amount)),
+      dueDay: String(getIncomeDueDay(income)),
+      stopDate: toDateOnly(income.stopDate),
+      category: income.category ?? '',
+      referenceNumber: income.referenceNumber ?? '',
+      notes: income.notes ?? '',
+    });
+    setIsCustomIncomeModalOpen(true);
   }, []);
 
   const fixedCategoryOptions = useMemo(() => {
@@ -428,19 +538,40 @@ export default function FinancePage() {
     [allDriverPayRecords, from, to],
   );
 
-  const customIncomesInRange = useMemo(
-    () => allCustomIncomes.filter((income) => isDateInRange(income.incomeDate, from, to)),
+  const fixedIncomeTemplates = useMemo(
+    () =>
+      allCustomIncomes.filter((income) => {
+        const startDate = toDateOnly(income.incomeDate) || from;
+        const stopDate = toDateOnly(income.stopDate);
+        return startDate <= to && (!stopDate || stopDate >= from);
+      }),
     [allCustomIncomes, from, to],
   );
 
+  const fixedIncomeOccurrences = useMemo(
+    () => expandRecurringCustomIncome(fixedIncomeTemplates, from, to),
+    [fixedIncomeTemplates, from, to],
+  );
+
   const fixedExpenses = useMemo(
-    () => expensesInRange.filter((expense) => expense.expenseType === ExpenseType.FIXED || expense.isRecurring),
+    () => expensesInRange.filter((expense) => expense.expenseType === ExpenseType.FIXED),
     [expensesInRange],
   );
 
   const variableExpenses = useMemo(
-    () => expensesInRange.filter((expense) => expense.expenseType !== ExpenseType.FIXED && !expense.isRecurring),
+    () => expensesInRange.filter((expense) => expense.expenseType !== ExpenseType.FIXED),
     [expensesInRange],
+  );
+
+  const fixedExpensesTotal = useMemo(
+    () =>
+      round2(
+        fixedExpenses.reduce(
+          (sum, expense) => sum + toNumber(expense.totalWithVat ?? expense.amount),
+          0,
+        ),
+      ),
+    [fixedExpenses],
   );
 
   const upcomingIncomes = useMemo(
@@ -448,29 +579,17 @@ export default function FinancePage() {
     [paymentsInRange],
   );
 
-  const paymentIncomeEvents = useMemo(
-    () =>
-      upcomingIncomes.filter(
-        (payment) => includeUpcomingIncome || payment.status === PaymentStatus.PAID,
-      ),
-    [upcomingIncomes, includeUpcomingIncome],
+  const customIncomeTotal = useMemo(
+    () => round2(fixedIncomeOccurrences.reduce((sum, income) => sum + toNumber(income.amount), 0)),
+    [fixedIncomeOccurrences],
   );
 
-  const paymentIncomeTotal = useMemo(
+  const fixedIncomeMonthlyTotal = useMemo(
     () =>
       round2(
-        paymentIncomeEvents.reduce(
-          (sum, payment) => sum + toNumber(payment.totalWithVat ?? payment.amount),
-          0,
-        ),
+        fixedIncomeTemplates.reduce((sum, income) => sum + toNumber(income.amount), 0),
       ),
-    [paymentIncomeEvents],
-  );
-
-  const customIncomeTotal = useMemo(
-    () =>
-      round2(customIncomesInRange.reduce((sum, income) => sum + toNumber(income.amount), 0)),
-    [customIncomesInRange],
+    [fixedIncomeTemplates],
   );
 
   const variableCostRows = useMemo<VariableCostRow[]>(() => {
@@ -499,8 +618,8 @@ export default function FinancePage() {
     return [...expenseRows, ...payRows].sort((a, b) => b.date.localeCompare(a.date));
   }, [variableExpenses, driverPayInRange]);
 
-  const ledgerEvents = useMemo<LedgerEvent[]>(() => {
-    const incomeEvents: LedgerEvent[] = paymentIncomeEvents.map((payment) => {
+  const allLedgerEvents = useMemo<LedgerEvent[]>(() => {
+    const incomeEvents: LedgerEvent[] = upcomingIncomes.map((payment) => {
       const linkedLoad = payment.load ?? loadsById.get(payment.loadId);
       const loadRef = linkedLoad?.referenceNumber ?? payment.loadId;
       return {
@@ -513,11 +632,11 @@ export default function FinancePage() {
       };
     });
 
-    const customIncomeEvents: LedgerEvent[] = customIncomesInRange.map((income) => ({
+    const customIncomeEvents: LedgerEvent[] = fixedIncomeOccurrences.map((income) => ({
       id: `custom-income-${income.id}`,
-      date: toDateOnly(income.incomeDate) || getDefaultFromDate(),
+      date: income.date,
       kind: 'INCOME',
-      label: income.description,
+      label: income.label,
       amount: toNumber(income.amount),
       source: 'CUSTOM',
     }));
@@ -541,24 +660,24 @@ export default function FinancePage() {
     return [...incomeEvents, ...customIncomeEvents, ...fixedEvents, ...variableEvents].sort((a, b) =>
       a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date),
     );
-  }, [paymentIncomeEvents, customIncomesInRange, fixedExpenses, variableCostRows, loadsById]);
+  }, [upcomingIncomes, fixedIncomeOccurrences, fixedExpenses, variableCostRows, loadsById]);
 
-  const upcomingPaymentOnlyTotal = useMemo(
-    () =>
-      round2(
-        upcomingIncomes
-          .filter((payment) => payment.status !== PaymentStatus.PAID)
-          .reduce((sum, payment) => sum + toNumber(payment.totalWithVat ?? payment.amount), 0),
-      ),
-    [upcomingIncomes],
-  );
+  const filteredLedgerEvents = useMemo<LedgerEvent[]>(() => {
+    if (simulationView === 'VARIABLE_ONLY') {
+      return allLedgerEvents.filter((event) => event.kind === 'VARIABLE');
+    }
+    if (simulationView === 'UPCOMING_INCOME_ONLY') {
+      return allLedgerEvents.filter((event) => event.kind === 'INCOME');
+    }
+    return allLedgerEvents;
+  }, [allLedgerEvents, simulationView]);
 
   const openingBalance = toNumber(currentBalanceInput);
 
   const simulation = useMemo(() => {
     let running = openingBalance;
 
-    const rows = ledgerEvents.map((event) => {
+    const rows = filteredLedgerEvents.map((event) => {
       if (event.kind === 'INCOME') {
         running += event.amount;
       } else {
@@ -572,12 +691,12 @@ export default function FinancePage() {
     });
 
     const totalIncome = round2(
-      ledgerEvents
+      filteredLedgerEvents
         .filter((event) => event.kind === 'INCOME')
         .reduce((sum, event) => sum + event.amount, 0),
     );
     const totalOut = round2(
-      ledgerEvents
+      filteredLedgerEvents
         .filter((event) => event.kind !== 'INCOME')
         .reduce((sum, event) => sum + event.amount, 0),
     );
@@ -588,7 +707,7 @@ export default function FinancePage() {
       totalOut,
       projectedBalance: round2(openingBalance + totalIncome - totalOut),
     };
-  }, [ledgerEvents, openingBalance]);
+  }, [filteredLedgerEvents, openingBalance]);
 
   const handleAddFixedExpense = async () => {
     const amount = toNumber(fixedForm.amount);
@@ -596,23 +715,27 @@ export default function FinancePage() {
       setError('Fixed expense amount must be greater than 0.');
       return;
     }
+    const dueDayNumeric = Number(fixedForm.dueDay);
+    if (!Number.isFinite(dueDayNumeric) || dueDayNumeric < 1 || dueDayNumeric > 31) {
+      setError('Due day must be a number between 1 and 31.');
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const isRecurring = fixedForm.recurrenceType !== ExpenseRecurrence.ONE_TIME;
       const payload = {
         category: fixedForm.category,
         expenseType: ExpenseType.FIXED,
         amount,
         currency: Currency.EUR,
-        expenseDate: fixedForm.dueDate,
-        recurrenceType: fixedForm.recurrenceType,
+        expenseDate: toMonthlyAnchorDate(dueDayNumeric, editingFixedExpense?.expenseDate),
+        recurrenceType: ExpenseRecurrence.MONTHLY,
         ...(fixedForm.label.trim() ? { recurringLabel: fixedForm.label.trim(), description: fixedForm.label.trim() } : {}),
         ...(fixedForm.vendor.trim() ? { vendor: fixedForm.vendor.trim() } : {}),
         ...(fixedForm.stopDate ? { stopDate: fixedForm.stopDate } : { stopDate: null }),
-        isRecurring,
+        isRecurring: true,
       };
 
       if (editingFixedExpense) {
@@ -694,6 +817,7 @@ export default function FinancePage() {
 
   const handleAddCustomIncome = async () => {
     const amount = toNumber(customIncomeForm.amount);
+    const dueDay = Math.trunc(toNumber(customIncomeForm.dueDay));
     if (!customIncomeForm.description.trim()) {
       setError('Custom income description is required.');
       return;
@@ -702,8 +826,8 @@ export default function FinancePage() {
       setError('Custom income amount must be greater than 0.');
       return;
     }
-    if (!customIncomeForm.incomeDate) {
-      setError('Custom income date is required.');
+    if (!Number.isFinite(dueDay) || dueDay < 1 || dueDay > 31) {
+      setError('Due day must be between 1 and 31.');
       return;
     }
 
@@ -711,10 +835,12 @@ export default function FinancePage() {
     setError(null);
 
     try {
-      await customIncomeApi.create({
+      const payload = {
         amount,
         currency: Currency.EUR,
-        incomeDate: customIncomeForm.incomeDate,
+        dueDay,
+        incomeDate: toMonthlyAnchorDate(dueDay, editingFixedIncome?.incomeDate),
+        ...(customIncomeForm.stopDate ? { stopDate: customIncomeForm.stopDate } : {}),
         description: customIncomeForm.description.trim(),
         ...(customIncomeForm.category.trim()
           ? { category: customIncomeForm.category.trim() }
@@ -725,22 +851,49 @@ export default function FinancePage() {
         ...(customIncomeForm.notes.trim()
           ? { notes: customIncomeForm.notes.trim() }
           : {}),
-      });
+      };
 
-      setCustomIncomeForm((prev) => ({
-        ...prev,
-        description: '',
-        amount: '',
-        category: '',
-        referenceNumber: '',
-        notes: '',
-      }));
+      if (editingFixedIncome) {
+        await customIncomeApi.update(editingFixedIncome.id, payload);
+      } else {
+        await customIncomeApi.create(payload);
+      }
+
+      resetCustomIncomeForm();
+      setEditingFixedIncome(null);
       setIsCustomIncomeModalOpen(false);
       await loadData();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to add custom income.');
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : editingFixedIncome
+            ? 'Failed to update fixed income.'
+            : 'Failed to add fixed income.',
+      );
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteFixedIncome = async (incomeId: string) => {
+    const confirmed = window.confirm('Delete this fixed income template?');
+    if (!confirmed) return;
+
+    setDeletingFixedIncomeId(incomeId);
+    setError(null);
+    try {
+      await customIncomeApi.delete(incomeId);
+      if (editingFixedIncome?.id === incomeId) {
+        setIsCustomIncomeModalOpen(false);
+        setEditingFixedIncome(null);
+        resetCustomIncomeForm();
+      }
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to delete fixed income.');
+    } finally {
+      setDeletingFixedIncomeId(null);
     }
   };
 
@@ -840,16 +993,6 @@ export default function FinancePage() {
                 To
                 <DateTimePicker mode="date" value={to} onChange={setTo} triggerClassName="mt-1" />
               </label>
-              <label className="text-xs text-slate-600">
-                Current Balance
-                <input
-                  type="number"
-                  step="0.01"
-                  value={currentBalanceInput}
-                  onChange={(event) => setCurrentBalanceInput(event.target.value)}
-                  className="mt-1 block w-36 rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900"
-                />
-              </label>
               <button
                 type="button"
                 onClick={() => void loadData()}
@@ -867,10 +1010,6 @@ export default function FinancePage() {
               Current Balance: {formatMoney(openingBalance)}
             </span>
           </div>
-
-          <p className="mt-3 text-xs text-slate-500">
-            Current Balance: {formatMoney(openingBalance)} | Range: income {formatMoney(simulation.totalIncome)} (payments {formatMoney(paymentIncomeTotal)} + custom {formatMoney(customIncomeTotal)}) • outgoing {formatMoney(simulation.totalOut)} • projected {formatMoney(simulation.projectedBalance)} • upcoming pending {formatMoney(upcomingPaymentOnlyTotal)}
-          </p>
 
           {error && (
             <p className="mt-3 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">{error}</p>
@@ -896,9 +1035,9 @@ export default function FinancePage() {
 
         {activeTab === 'CASH_FLOW' && (
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-start">
-        <section className="order-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
+        <section className="order-1 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">3. Fixed Expenses</h2>
+            <h2 className="text-sm font-semibold text-slate-900">Fixed Expenses</h2>
             <button
               type="button"
               onClick={openCreateFixedExpenseModal}
@@ -913,11 +1052,10 @@ export default function FinancePage() {
             <table className="min-w-full text-sm">
               <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-2 py-1">Due Date</th>
+                  <th className="px-2 py-1">Due Day</th>
                   <th className="px-2 py-1">Stop Date</th>
                   <th className="px-2 py-1">Label</th>
                   <th className="px-2 py-1">Category</th>
-                  <th className="px-2 py-1">Recurrence</th>
                   <th className="px-2 py-1">Vendor</th>
                   <th className="px-2 py-1 text-right">Amount</th>
                 </tr>
@@ -925,7 +1063,7 @@ export default function FinancePage() {
               <tbody>
                 {fixedExpenses.length === 0 && (
                   <tr>
-                    <td className="px-2 py-3 text-slate-500" colSpan={7}>
+                    <td className="px-2 py-3 text-slate-500" colSpan={6}>
                       {isLoading ? 'Loading...' : 'No fixed expenses in selected range.'}
                     </td>
                   </tr>
@@ -940,7 +1078,7 @@ export default function FinancePage() {
                       onClick={() => openEditFixedExpenseModal(expense)}
                       title="Click to edit fixed expense"
                     >
-                      <td className="px-2 py-1.5 text-slate-700">{formatDateCell(expense.expenseDate)}</td>
+                      <td className="px-2 py-1.5 text-slate-700">Day {getDueDayFromDate(expense.expenseDate)}</td>
                       <td className="px-2 py-1.5 text-slate-700">
                         {expense.stopDate ? formatDateCell(toDateOnly(expense.stopDate)) : '—'}
                       </td>
@@ -948,164 +1086,137 @@ export default function FinancePage() {
                         {expense.recurringLabel ?? expense.description ?? expense.category}
                       </td>
                       <td className="px-2 py-1.5 text-slate-700">{getExpenseCategoryLabel(expense.category)}</td>
-                      <td className="px-2 py-1.5 text-slate-700">
-                        {getExpenseRecurrenceLabel(expense.recurrenceType, expense.isRecurring)}
-                      </td>
                       <td className="px-2 py-1.5 text-slate-700">{expense.vendor ?? '—'}</td>
                       <td className="px-2 py-1.5 text-right text-slate-800">
                         {formatMoney(toNumber(expense.totalWithVat ?? expense.amount))}
                       </td>
                     </tr>
                   ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="order-1 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">1. Upcoming Income</h2>
-            <button
-              type="button"
-              onClick={() => setIsCustomIncomeModalOpen(true)}
-              className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              <Plus className="h-3 w-3" />
-              Add Custom Income
-            </button>
-          </div>
-          <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-2 py-1">Incoming Date</th>
-                  <th className="px-2 py-1">Invoice Date</th>
-                  <th className="px-2 py-1">Load</th>
-                  <th className="px-2 py-1">Broker</th>
-                  <th className="px-2 py-1">Status</th>
-                  <th className="px-2 py-1 text-right">Amount</th>
-                  <th className="px-2 py-1 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {upcomingIncomes.length === 0 && (
-                  <tr>
-                    <td className="px-2 py-3 text-slate-500" colSpan={7}>
-                      {isLoading ? 'Loading...' : 'No income payment rows in selected range.'}
+                {fixedExpenses.length > 0 && (
+                  <tr className="border-t-2 border-slate-300 bg-slate-50">
+                    <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={5}>
+                      Total
+                    </td>
+                    <td className="px-2 py-2 text-right text-sm font-semibold text-slate-900">
+                      {formatMoney(fixedExpensesTotal)}
                     </td>
                   </tr>
                 )}
-                {upcomingIncomes.map((payment) => {
-                  const linkedLoad = payment.load ?? loadsById.get(payment.loadId);
-                  const loadRef = linkedLoad?.referenceNumber ?? payment.loadId;
-                  const brokerName = payment.broker?.companyName ?? linkedLoad?.broker?.companyName ?? '—';
-                  return (
-                    <tr key={payment.id} className="border-t border-slate-100">
-                      <td className="px-2 py-1.5 text-slate-700">{formatDateCell(resolveIncomeDate(payment))}</td>
-                      <td className="px-2 py-1.5 text-slate-700">
-                        {payment.issueDate ? formatDateCell(payment.issueDate) : '—'}
-                      </td>
-                      <td className="px-2 py-1.5 text-slate-800">{loadRef}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{brokerName}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{payment.status}</td>
-                      <td className="px-2 py-1.5 text-right text-emerald-700 font-semibold">
-                        {formatMoney(toNumber(payment.totalWithVat ?? payment.amount))}
-                      </td>
-                      <td className="px-2 py-1.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenLoadPayment(payment.loadId)}
-                          className="rounded border border-blue-300 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                        >
-                          View Load
-                        </button>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-5">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-slate-900">Fixed Income</h3>
+              <button
+                type="button"
+                onClick={openCreateFixedIncomeModal}
+                className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Plus className="h-3 w-3" />
+                Add Fixed Income
+              </button>
+            </div>
+
+            <div className="mt-3 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-2 py-1">Due Day</th>
+                    <th className="px-2 py-1">Stop Date</th>
+                    <th className="px-2 py-1">Description</th>
+                    <th className="px-2 py-1">Category</th>
+                    <th className="px-2 py-1">Reference</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fixedIncomeTemplates.length === 0 && (
+                    <tr>
+                      <td className="px-2 py-3 text-slate-500" colSpan={6}>
+                        {isLoading ? 'Loading...' : 'No fixed income templates in selected range.'}
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-        </section>
-
-        <section className="order-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-1">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">2. Variable Costs</h2>
-            <button
-              type="button"
-              onClick={() => setIsVariableCostModalOpen(true)}
-              className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              <Plus className="h-3 w-3" />
-              Add Variable Cost
-            </button>
-          </div>
-
-          <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-2 py-1">Date</th>
-                  <th className="px-2 py-1">Source</th>
-                  <th className="px-2 py-1">Category</th>
-                  <th className="px-2 py-1">Label</th>
-                  <th className="px-2 py-1">Status</th>
-                  <th className="px-2 py-1 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {variableCostRows.length === 0 && (
-                  <tr>
-                    <td className="px-2 py-3 text-slate-500" colSpan={6}>
-                      {isLoading ? 'Loading...' : 'No variable costs in selected range.'}
-                    </td>
-                  </tr>
-                )}
-                {variableCostRows.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-2 py-1.5 text-slate-700">{formatDateCell(row.date)}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{row.source}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{getVariableCategoryLabel(row.category)}</td>
-                      <td className="px-2 py-1.5 text-slate-800">{row.label}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{row.status}</td>
-                      <td className="px-2 py-1.5 text-right font-medium text-slate-900">{formatMoney(row.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  )}
+                  {fixedIncomeTemplates
+                    .slice()
+                    .sort((a, b) => getIncomeDueDay(a) - getIncomeDueDay(b))
+                    .map((income) => (
+                      <tr
+                        key={income.id}
+                        className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
+                        onClick={() => openEditFixedIncomeModal(income)}
+                        title="Click to edit fixed income"
+                      >
+                        <td className="px-2 py-1.5 text-slate-700">Day {getIncomeDueDay(income)}</td>
+                        <td className="px-2 py-1.5 text-slate-700">
+                          {income.stopDate ? formatDateCell(toDateOnly(income.stopDate)) : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 font-medium text-slate-800">{income.description}</td>
+                        <td className="px-2 py-1.5 text-slate-700">{income.category ?? '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-700">{income.referenceNumber ?? '—'}</td>
+                        <td className="px-2 py-1.5 text-right text-emerald-700 font-medium">
+                          {formatMoney(toNumber(income.amount))}
+                        </td>
+                      </tr>
+                    ))}
+                  {fixedIncomeTemplates.length > 0 && (
+                    <tr className="border-t-2 border-slate-300 bg-slate-50">
+                      <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={5}>
+                        Total (Monthly)
+                      </td>
+                      <td className="px-2 py-2 text-right text-sm font-semibold text-emerald-700">
+                        {formatMoney(fixedIncomeMonthlyTotal)}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
 
-        <section className="order-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-2 xl:row-span-3 xl:row-start-1">
-          <h2 className="text-sm font-semibold text-slate-900">4. Combined Balance Simulation</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Opening balance {formatMoney(openingBalance)} • Incoming {formatMoney(simulation.totalIncome)} • Outgoing {formatMoney(simulation.totalOut)} • Projected {formatMoney(simulation.projectedBalance)}
-          </p>
+        <section className="order-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-start-2">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Combined Balance Simulation</h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsVariableCostModalOpen(true)}
+                className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Plus className="h-3 w-3" />
+                Add Variable Cost
+              </button>
+              <button
+                type="button"
+                onClick={openCreateFixedIncomeModal}
+                className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Plus className="h-3 w-3" />
+                Add Fixed Income
+              </button>
+            </div>
+          </div>
 
           <div className="mt-3 inline-flex rounded-lg border border-slate-300 bg-slate-50 p-1">
-            <button
-              type="button"
-              onClick={() => setIncludeUpcomingIncome(true)}
-              className={`rounded px-3 py-1 text-xs font-semibold ${
-                includeUpcomingIncome
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              With Upcoming Income
-            </button>
-            <button
-              type="button"
-              onClick={() => setIncludeUpcomingIncome(false)}
-              className={`rounded px-3 py-1 text-xs font-semibold ${
-                !includeUpcomingIncome
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              Without Upcoming Income
-            </button>
+            {SIMULATION_VIEW_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setSimulationView(option.id)}
+                className={`rounded px-3 py-1 text-xs font-semibold ${
+                  simulationView === option.id
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
 
           <div className="mt-3 overflow-x-auto">
@@ -1157,6 +1268,22 @@ export default function FinancePage() {
                     </tr>
                   );
                 })}
+                {simulation.rows.length > 0 && (
+                  <tr className="border-t-2 border-slate-300 bg-slate-50">
+                    <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={3}>
+                      Total
+                    </td>
+                    <td className="px-2 py-2 text-right text-sm font-semibold text-emerald-700">
+                      {formatMoney(simulation.totalIncome)}
+                    </td>
+                    <td className="px-2 py-2 text-right text-sm font-semibold text-rose-700">
+                      {formatMoney(simulation.totalOut)}
+                    </td>
+                    <td className="px-2 py-2 text-right text-sm font-semibold text-slate-900">
+                      {formatMoney(simulation.totalIncome - simulation.totalOut)}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -1351,12 +1478,15 @@ export default function FinancePage() {
                 />
               </label>
               <label className="text-xs text-slate-600">
-                Due Date
-                <DateTimePicker
-                  mode="date"
-                  value={fixedForm.dueDate}
-                  onChange={(value) => setFixedForm((prev) => ({ ...prev, dueDate: value }))}
-                  triggerClassName="mt-1"
+                Due Day (1-31)
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  value={fixedForm.dueDay}
+                  onChange={(event) => setFixedForm((prev) => ({ ...prev, dueDay: event.target.value }))}
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
               <label className="text-xs text-slate-600">
@@ -1367,25 +1497,6 @@ export default function FinancePage() {
                   onChange={(value) => setFixedForm((prev) => ({ ...prev, stopDate: value }))}
                   triggerClassName="mt-1"
                 />
-              </label>
-              <label className="text-xs text-slate-600">
-                Repeat
-                <select
-                  value={fixedForm.recurrenceType}
-                  onChange={(event) =>
-                    setFixedForm((prev) => ({
-                      ...prev,
-                      recurrenceType: event.target.value as ExpenseRecurrence,
-                    }))
-                  }
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                >
-                  {FIXED_RECURRENCE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
               </label>
               <label className="text-xs text-slate-600">
                 Label
@@ -1560,7 +1671,11 @@ export default function FinancePage() {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
           onClick={() => {
-            if (!isSubmitting) setIsCustomIncomeModalOpen(false);
+            if (!isSubmitting && !deletingFixedIncomeId) {
+              setIsCustomIncomeModalOpen(false);
+              setEditingFixedIncome(null);
+              resetCustomIncomeForm();
+            }
           }}
         >
           <section
@@ -1569,15 +1684,21 @@ export default function FinancePage() {
           >
             <div className="mb-3 flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">Add Custom Income</h3>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  {editingFixedIncome ? 'Edit Fixed Income' : 'Add Fixed Income'}
+                </h3>
                 <p className="mt-1 text-xs text-slate-500">
-                  Manual entry not linked to a load.
+                  Monthly recurring entry not linked to a load.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setIsCustomIncomeModalOpen(false)}
-                disabled={isSubmitting}
+                onClick={() => {
+                  setIsCustomIncomeModalOpen(false);
+                  setEditingFixedIncome(null);
+                  resetCustomIncomeForm();
+                }}
+                disabled={isSubmitting || Boolean(deletingFixedIncomeId)}
                 className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
                 title="Close"
               >
@@ -1613,14 +1734,18 @@ export default function FinancePage() {
                 />
               </label>
               <label className="text-xs text-slate-600">
-                Date
-                <DateTimePicker
-                  mode="date"
-                  value={customIncomeForm.incomeDate}
-                  onChange={(value) =>
-                    setCustomIncomeForm((prev) => ({ ...prev, incomeDate: value }))
+                Due Day (1-31)
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  placeholder="e.g. 15"
+                  value={customIncomeForm.dueDay}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, dueDay: event.target.value }))
                   }
-                  triggerClassName="mt-1"
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
               <label className="text-xs text-slate-600">
@@ -1647,6 +1772,17 @@ export default function FinancePage() {
                   className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
+              <label className="text-xs text-slate-600">
+                Stop Date (optional)
+                <DateTimePicker
+                  mode="date"
+                  value={customIncomeForm.stopDate}
+                  onChange={(value) =>
+                    setCustomIncomeForm((prev) => ({ ...prev, stopDate: value }))
+                  }
+                  triggerClassName="mt-1"
+                />
+              </label>
               <label className="text-xs text-slate-600 md:col-span-2">
                 Notes (optional)
                 <textarea
@@ -1661,10 +1797,24 @@ export default function FinancePage() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
+              {editingFixedIncome && (
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteFixedIncome(editingFixedIncome.id)}
+                  disabled={isSubmitting || deletingFixedIncomeId === editingFixedIncome.id}
+                  className="rounded border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                >
+                  Delete
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setIsCustomIncomeModalOpen(false)}
-                disabled={isSubmitting}
+                onClick={() => {
+                  setIsCustomIncomeModalOpen(false);
+                  setEditingFixedIncome(null);
+                  resetCustomIncomeForm();
+                }}
+                disabled={isSubmitting || Boolean(deletingFixedIncomeId)}
                 className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
                 Cancel
@@ -1672,11 +1822,11 @@ export default function FinancePage() {
               <button
                 type="button"
                 onClick={() => void handleAddCustomIncome()}
-                disabled={isSubmitting}
+                disabled={isSubmitting || Boolean(deletingFixedIncomeId)}
                 className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 <Plus className="h-3.5 w-3.5" />
-                Add Income
+                {editingFixedIncome ? 'Save Changes' : 'Add Income'}
               </button>
             </div>
           </section>
