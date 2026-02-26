@@ -22,7 +22,7 @@ type LedgerEvent = {
   label: string;
   amount: number;
   source?: 'PAYMENT' | 'CUSTOM';
-  editableType?: 'FIXED_EXPENSE' | 'FIXED_INCOME';
+  editableType?: 'FIXED_EXPENSE' | 'FIXED_INCOME' | 'ONE_TIME_INCOME' | 'VARIABLE_EXPENSE';
   entityId?: string;
 };
 
@@ -65,7 +65,7 @@ const LOAD_PAYMENT_FILTERS: Array<{ id: LoadPaymentFilter; label: string }> = [
 
 const SIMULATION_VIEW_OPTIONS: Array<{ id: SimulationView; label: string }> = [
   { id: 'COMBINED', label: 'Combined' },
-  { id: 'VARIABLE_ONLY', label: 'Variable Cost' },
+  { id: 'VARIABLE_ONLY', label: 'One-Time Cost' },
   { id: 'UPCOMING_INCOME_ONLY', label: 'Upcoming Income' },
 ];
 
@@ -82,6 +82,8 @@ const getDefaultToDate = (): string => {
   const now = new Date();
   return toDateInput(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 2, 0)));
 };
+
+const getTodayDate = (): string => toDateInput(new Date());
 
 const toNumber = (value: unknown): number => {
   const parsed = Number(value);
@@ -194,6 +196,21 @@ const getVariableCategoryLabel = (category: string): string => {
   if (category === ExpenseCategory.MAINTENANCE) return 'Maintenance';
   if (category === ExpenseCategory.SALARY || category === 'DRIVER_PAY') return 'Driver Wage';
   return category;
+};
+
+const getLedgerTypeMeta = (
+  event: LedgerEvent,
+): { primary: 'INCOME' | 'EXPENSE'; secondary: 'RECURRING' | 'ONE-TIME' } => {
+  if (event.kind === 'FIXED') {
+    return { primary: 'EXPENSE', secondary: 'RECURRING' };
+  }
+  if (event.kind === 'VARIABLE') {
+    return { primary: 'EXPENSE', secondary: 'ONE-TIME' };
+  }
+  if (event.editableType === 'FIXED_INCOME') {
+    return { primary: 'INCOME', secondary: 'RECURRING' };
+  }
+  return { primary: 'INCOME', secondary: 'ONE-TIME' };
 };
 
 const getDefaultDueDay = (): string => String(new Date().getDate());
@@ -315,6 +332,7 @@ export default function FinancePage() {
   const [simulationView, setSimulationView] = useState<SimulationView>('COMBINED');
   const [currentBalanceInput, setCurrentBalanceInput] = useState('0');
   const [isCustomIncomeModalOpen, setIsCustomIncomeModalOpen] = useState(false);
+  const [isOneTimeCustomIncomeModalOpen, setIsOneTimeCustomIncomeModalOpen] = useState(false);
   const [isFixedExpenseModalOpen, setIsFixedExpenseModalOpen] = useState(false);
   const [isVariableCostModalOpen, setIsVariableCostModalOpen] = useState(false);
 
@@ -324,7 +342,9 @@ export default function FinancePage() {
   const [allCustomIncomes, setAllCustomIncomes] = useState<CustomIncome[]>([]);
   const [allLoads, setAllLoads] = useState<Load[]>([]);
   const [editingFixedExpense, setEditingFixedExpense] = useState<Expense | null>(null);
+  const [editingVariableExpense, setEditingVariableExpense] = useState<Expense | null>(null);
   const [editingFixedIncome, setEditingFixedIncome] = useState<CustomIncome | null>(null);
+  const [editingOneTimeIncome, setEditingOneTimeIncome] = useState<CustomIncome | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -357,6 +377,14 @@ export default function FinancePage() {
     notes: '',
   });
 
+  const [oneTimeCustomIncomeForm, setOneTimeCustomIncomeForm] = useState({
+    description: '',
+    amount: '',
+    inputCurrency: 'EUR' as FixedIncomeInputCurrency,
+    incomeDate: getTodayDate(),
+    notes: '',
+  });
+
   const resetCustomIncomeForm = useCallback(() => {
     setCustomIncomeForm({
       description: '',
@@ -368,12 +396,31 @@ export default function FinancePage() {
     });
   }, []);
 
+  const resetOneTimeCustomIncomeForm = useCallback(() => {
+    setOneTimeCustomIncomeForm({
+      description: '',
+      amount: '',
+      inputCurrency: 'EUR',
+      incomeDate: getTodayDate(),
+      notes: '',
+    });
+  }, []);
+
   const resetFixedForm = useCallback(() => {
     setFixedForm({
       category: ExpenseCategory.LEASING,
       amount: '',
       dueDay: getDefaultDueDay(),
       stopDate: '',
+      label: '',
+    });
+  }, []);
+
+  const resetVariableForm = useCallback(() => {
+    setVariableForm({
+      category: ExpenseCategory.FUEL,
+      amount: '',
+      date: getDefaultFromDate(),
       label: '',
     });
   }, []);
@@ -394,6 +441,23 @@ export default function FinancePage() {
       label: expense.recurringLabel ?? expense.description ?? '',
     });
     setIsFixedExpenseModalOpen(true);
+  }, []);
+
+  const openCreateVariableCostModal = useCallback(() => {
+    setEditingVariableExpense(null);
+    resetVariableForm();
+    setIsVariableCostModalOpen(true);
+  }, [resetVariableForm]);
+
+  const openEditVariableCostModal = useCallback((expense: Expense) => {
+    setEditingVariableExpense(expense);
+    setVariableForm({
+      category: expense.category,
+      amount: String(toNumber(expense.amount)),
+      date: toDateOnly(expense.expenseDate) || getTodayDate(),
+      label: expense.description ?? expense.recurringLabel ?? '',
+    });
+    setIsVariableCostModalOpen(true);
   }, []);
 
   const openCreateFixedIncomeModal = useCallback(() => {
@@ -420,6 +484,31 @@ export default function FinancePage() {
       notes: income.notes ?? '',
     });
     setIsCustomIncomeModalOpen(true);
+  }, []);
+
+  const openCreateOneTimeCustomIncomeModal = useCallback(() => {
+    setEditingOneTimeIncome(null);
+    resetOneTimeCustomIncomeForm();
+    setIsOneTimeCustomIncomeModalOpen(true);
+  }, [resetOneTimeCustomIncomeForm]);
+
+  const openEditOneTimeCustomIncomeModal = useCallback((income: CustomIncome) => {
+    const inputCurrency: FixedIncomeInputCurrency =
+      income.inputCurrency === 'RSD' ? 'RSD' : 'EUR';
+    const inputAmount =
+      inputCurrency === 'RSD'
+        ? toNumber(income.inputAmount ?? income.amount)
+        : toNumber(income.amount);
+
+    setEditingOneTimeIncome(income);
+    setOneTimeCustomIncomeForm({
+      description: income.description ?? '',
+      amount: String(inputAmount),
+      inputCurrency,
+      incomeDate: toDateOnly(income.incomeDate) || getTodayDate(),
+      notes: income.notes ?? '',
+    });
+    setIsOneTimeCustomIncomeModalOpen(true);
   }, []);
 
   const fixedCategoryOptions = useMemo(() => {
@@ -547,10 +636,23 @@ export default function FinancePage() {
   const fixedIncomeTemplates = useMemo(
     () =>
       allCustomIncomes.filter((income) => {
+        if (income.isOneTime) return false;
         const startDate = toDateOnly(income.incomeDate) || from;
         const stopDate = toDateOnly(income.stopDate);
         return startDate <= to && (!stopDate || stopDate >= from);
       }),
+    [allCustomIncomes, from, to],
+  );
+
+  const oneTimeCustomIncomesInRange = useMemo(
+    () =>
+      allCustomIncomes
+        .filter((income) => income.isOneTime && isDateInRange(income.incomeDate, from, to))
+        .sort((a, b) => {
+          const aDate = toDateOnly(a.incomeDate) || '';
+          const bDate = toDateOnly(b.incomeDate) || '';
+          return aDate === bDate ? a.id.localeCompare(b.id) : aDate.localeCompare(bDate);
+        }),
     [allCustomIncomes, from, to],
   );
 
@@ -583,11 +685,6 @@ export default function FinancePage() {
   const upcomingIncomes = useMemo(
     () => [...paymentsInRange].sort((a, b) => resolveIncomeDate(a).localeCompare(resolveIncomeDate(b))),
     [paymentsInRange],
-  );
-
-  const customIncomeTotal = useMemo(
-    () => round2(fixedIncomeOccurrences.reduce((sum, income) => sum + toNumber(income.amount), 0)),
-    [fixedIncomeOccurrences],
   );
 
   const fixedIncomeMonthlyTotal = useMemo(
@@ -649,6 +746,17 @@ export default function FinancePage() {
       entityId: income.incomeId,
     }));
 
+    const oneTimeIncomeEvents: LedgerEvent[] = oneTimeCustomIncomesInRange.map((income) => ({
+      id: `custom-income-one-time-${income.id}`,
+      date: toDateOnly(income.incomeDate) || getDefaultFromDate(),
+      kind: 'INCOME',
+      label: income.description,
+      amount: toNumber(income.amount),
+      source: 'CUSTOM',
+      editableType: 'ONE_TIME_INCOME',
+      entityId: income.id,
+    }));
+
     const fixedEvents: LedgerEvent[] = fixedExpenses.map((expense) => ({
       id: `fixed-${expense.id}`,
       date: toDateOnly(expense.expenseDate) || getDefaultFromDate(),
@@ -665,12 +773,15 @@ export default function FinancePage() {
       kind: 'VARIABLE',
       label: row.label,
       amount: toNumber(row.amount),
+      ...(row.source === 'EXPENSE'
+        ? { editableType: 'VARIABLE_EXPENSE' as const, entityId: row.id }
+        : {}),
     }));
 
-    return [...incomeEvents, ...customIncomeEvents, ...fixedEvents, ...variableEvents].sort((a, b) =>
+    return [...incomeEvents, ...customIncomeEvents, ...oneTimeIncomeEvents, ...fixedEvents, ...variableEvents].sort((a, b) =>
       a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date),
     );
-  }, [upcomingIncomes, fixedIncomeOccurrences, fixedExpenses, variableCostRows, loadsById]);
+  }, [upcomingIncomes, fixedIncomeOccurrences, oneTimeCustomIncomesInRange, fixedExpenses, variableCostRows, loadsById]);
 
   const filteredLedgerEvents = useMemo<LedgerEvent[]>(() => {
     if (simulationView === 'VARIABLE_ONLY') {
@@ -802,7 +913,7 @@ export default function FinancePage() {
     setError(null);
 
     try {
-      await expenseApi.create({
+      const payload = {
         category: variableForm.category,
         expenseType: ExpenseType.VARIABLE,
         amount,
@@ -811,13 +922,47 @@ export default function FinancePage() {
         recurrenceType: ExpenseRecurrence.ONE_TIME,
         ...(variableForm.label.trim() ? { description: variableForm.label.trim() } : {}),
         isRecurring: false,
-      });
+      };
 
-      setVariableForm((prev) => ({ ...prev, amount: '', label: '' }));
+      if (editingVariableExpense) {
+        await expenseApi.update(editingVariableExpense.id, payload);
+      } else {
+        await expenseApi.create(payload);
+      }
+
+      resetVariableForm();
+      setEditingVariableExpense(null);
       setIsVariableCostModalOpen(false);
       await loadData();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to add variable expense.');
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : editingVariableExpense
+            ? 'Failed to update variable expense.'
+            : 'Failed to add variable expense.',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteVariableExpense = async () => {
+    if (!editingVariableExpense) return;
+    const confirmed = window.confirm('Hard delete this variable expense? This action cannot be undone.');
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      await expenseApi.delete(editingVariableExpense.id);
+      setIsVariableCostModalOpen(false);
+      setEditingVariableExpense(null);
+      resetVariableForm();
+      await loadData();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to delete variable expense.');
     } finally {
       setIsSubmitting(false);
     }
@@ -852,6 +997,7 @@ export default function FinancePage() {
         currency: Currency.EUR,
         inputAmount: rawAmount,
         inputCurrency: customIncomeForm.inputCurrency,
+        isOneTime: false,
         dueDay,
         incomeDate: toMonthlyAnchorDate(dueDay, editingFixedIncome?.incomeDate),
         ...(customIncomeForm.stopDate ? { stopDate: customIncomeForm.stopDate } : {}),
@@ -876,16 +1022,86 @@ export default function FinancePage() {
         requestError instanceof Error
           ? requestError.message
           : editingFixedIncome
-            ? 'Failed to update fixed income.'
-            : 'Failed to add fixed income.',
+            ? 'Failed to update recurring income.'
+            : 'Failed to add recurring income.',
       );
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleDeleteFixedIncome = async (incomeId: string) => {
-    const confirmed = window.confirm('Delete this fixed income template?');
+  const handleAddOneTimeCustomIncome = async () => {
+    const rawAmount = toNumber(oneTimeCustomIncomeForm.amount);
+    const amount =
+      oneTimeCustomIncomeForm.inputCurrency === 'RSD'
+        ? round2(rawAmount / RSD_TO_EUR_MULTIPLIER)
+        : rawAmount;
+    const incomeDate = toDateOnly(oneTimeCustomIncomeForm.incomeDate);
+    if (!oneTimeCustomIncomeForm.description.trim()) {
+      setError('Custom income description is required.');
+      return;
+    }
+    if (rawAmount <= 0) {
+      setError('Custom income amount must be greater than 0.');
+      return;
+    }
+    if (!incomeDate) {
+      setError('Custom income date is required.');
+      return;
+    }
+    const dueDay = Number(incomeDate.slice(8, 10));
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const payload = {
+        amount,
+        currency: Currency.EUR,
+        inputAmount: rawAmount,
+        inputCurrency: oneTimeCustomIncomeForm.inputCurrency,
+        isOneTime: true,
+        dueDay,
+        incomeDate,
+        description: oneTimeCustomIncomeForm.description.trim(),
+        stopDate: null,
+        ...(oneTimeCustomIncomeForm.notes.trim()
+          ? { notes: oneTimeCustomIncomeForm.notes.trim() }
+          : {}),
+      };
+
+      if (editingOneTimeIncome) {
+        await customIncomeApi.update(editingOneTimeIncome.id, payload);
+      } else {
+        await customIncomeApi.create(payload);
+      }
+
+      resetOneTimeCustomIncomeForm();
+      setEditingOneTimeIncome(null);
+      setIsOneTimeCustomIncomeModalOpen(false);
+      await loadData();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : editingOneTimeIncome
+            ? 'Failed to update custom income.'
+            : 'Failed to add custom income.',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteCustomIncome = async (
+    incomeId: string,
+    type: 'FIXED' | 'ONE_TIME',
+  ) => {
+    const confirmed = window.confirm(
+      type === 'FIXED'
+        ? 'Delete this recurring income template?'
+        : 'Delete this custom income entry?',
+    );
     if (!confirmed) return;
 
     setDeletingFixedIncomeId(incomeId);
@@ -897,9 +1113,20 @@ export default function FinancePage() {
         setEditingFixedIncome(null);
         resetCustomIncomeForm();
       }
+      if (editingOneTimeIncome?.id === incomeId) {
+        setIsOneTimeCustomIncomeModalOpen(false);
+        setEditingOneTimeIncome(null);
+        resetOneTimeCustomIncomeForm();
+      }
       await loadData();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Failed to delete fixed income.');
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : type === 'FIXED'
+            ? 'Failed to delete recurring income.'
+            : 'Failed to delete custom income.',
+      );
     } finally {
       setDeletingFixedIncomeId(null);
     }
@@ -990,8 +1217,24 @@ export default function FinancePage() {
 
     if (row.editableType === 'FIXED_INCOME') {
       const income = allCustomIncomes.find((item) => item.id === row.entityId);
-      if (income) {
+      if (income && !income.isOneTime) {
         openEditFixedIncomeModal(income);
+      }
+      return;
+    }
+
+    if (row.editableType === 'ONE_TIME_INCOME') {
+      const income = allCustomIncomes.find((item) => item.id === row.entityId);
+      if (income && income.isOneTime) {
+        openEditOneTimeCustomIncomeModal(income);
+      }
+      return;
+    }
+
+    if (row.editableType === 'VARIABLE_EXPENSE') {
+      const expense = allExpenses.find((item) => item.id === row.entityId);
+      if (expense && expense.expenseType !== ExpenseType.FIXED) {
+        openEditVariableCostModal(expense);
       }
     }
   };
@@ -1133,14 +1376,14 @@ export default function FinancePage() {
 
           <div className="mt-5">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-slate-900">Fixed Income</h3>
+              <h3 className="text-sm font-semibold text-slate-900">Recurring Income</h3>
               <button
                 type="button"
                 onClick={openCreateFixedIncomeModal}
                 className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <Plus className="h-3 w-3" />
-                Add Fixed Income
+                Add Recurring Income
               </button>
             </div>
 
@@ -1158,7 +1401,7 @@ export default function FinancePage() {
                   {fixedIncomeTemplates.length === 0 && (
                     <tr>
                       <td className="px-2 py-3 text-slate-500" colSpan={4}>
-                        {isLoading ? 'Loading...' : 'No fixed income templates in selected range.'}
+                        {isLoading ? 'Loading...' : 'No recurring income templates in selected range.'}
                       </td>
                     </tr>
                   )}
@@ -1170,7 +1413,7 @@ export default function FinancePage() {
                         key={income.id}
                         className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
                         onClick={() => openEditFixedIncomeModal(income)}
-                        title="Click to edit fixed income"
+                        title="Click to edit recurring income"
                       >
                         <td className="px-2 py-1.5 text-slate-700">Day {getIncomeDueDay(income)}</td>
                         <td className="px-2 py-1.5 text-slate-700">
@@ -1206,19 +1449,19 @@ export default function FinancePage() {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => setIsVariableCostModalOpen(true)}
+                onClick={openCreateVariableCostModal}
                 className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <Plus className="h-3 w-3" />
-                Add Variable Cost
+                Add One-Time Cost
               </button>
               <button
                 type="button"
-                onClick={openCreateFixedIncomeModal}
+                onClick={openCreateOneTimeCustomIncomeModal}
                 className="inline-flex items-center justify-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <Plus className="h-3 w-3" />
-                Add Fixed Income
+                Add One-Time Income
               </button>
             </div>
           </div>
@@ -1263,12 +1506,7 @@ export default function FinancePage() {
                 {simulation.rows.map((row) => {
                   const isIncome = row.kind === 'INCOME';
                   const isEditable = Boolean(row.editableType && row.entityId);
-                  const typeLabel =
-                    row.kind === 'INCOME'
-                      ? row.source === 'CUSTOM'
-                        ? 'INCOME (CUSTOM)'
-                        : 'INCOME (PAYMENT)'
-                      : row.kind;
+                  const typeMeta = getLedgerTypeMeta(row);
                   return (
                     <tr
                       key={row.id}
@@ -1277,7 +1515,20 @@ export default function FinancePage() {
                       title={isEditable ? 'Click to edit' : undefined}
                     >
                       <td className="px-2 py-1.5 text-slate-700">{formatDateCell(row.date)}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{typeLabel}</td>
+                      <td className="px-2 py-1.5 text-slate-700">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                            typeMeta.primary === 'INCOME'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-rose-100 text-rose-700'
+                          }`}>
+                            {typeMeta.primary}
+                          </span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                            {typeMeta.secondary}
+                          </span>
+                        </div>
+                      </td>
                       <td className="px-2 py-1.5 text-slate-800">{row.label}</td>
                       <td className="px-2 py-1.5 text-right text-emerald-700 font-medium">
                         {isIncome ? formatMoney(row.amount) : '—'}
@@ -1581,7 +1832,11 @@ export default function FinancePage() {
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
           onClick={() => {
-            if (!isSubmitting) setIsVariableCostModalOpen(false);
+            if (!isSubmitting) {
+              setIsVariableCostModalOpen(false);
+              setEditingVariableExpense(null);
+              resetVariableForm();
+            }
           }}
         >
           <section
@@ -1589,10 +1844,16 @@ export default function FinancePage() {
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">Add Variable Cost</h3>
+              <h3 className="text-sm font-semibold text-slate-900">
+                {editingVariableExpense ? 'Edit One-Time Cost' : 'Add One-Time Cost'}
+              </h3>
               <button
                 type="button"
-                onClick={() => setIsVariableCostModalOpen(false)}
+                onClick={() => {
+                  setIsVariableCostModalOpen(false);
+                  setEditingVariableExpense(null);
+                  resetVariableForm();
+                }}
                 disabled={isSubmitting}
                 className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
                 title="Close"
@@ -1651,10 +1912,27 @@ export default function FinancePage() {
               </label>
             </div>
 
-            <div className="mt-4 flex items-center justify-end gap-2">
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <div>
+                {editingVariableExpense && (
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteVariableExpense()}
+                    disabled={isSubmitting}
+                    className="rounded border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                  >
+                    Hard Delete
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setIsVariableCostModalOpen(false)}
+                onClick={() => {
+                  setIsVariableCostModalOpen(false);
+                  setEditingVariableExpense(null);
+                  resetVariableForm();
+                }}
                 disabled={isSubmitting}
                 className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
@@ -1667,8 +1945,9 @@ export default function FinancePage() {
                 className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 <Plus className="h-3.5 w-3.5" />
-                Add Variable Cost
+                {editingVariableExpense ? 'Save One-Time Cost' : 'Add One-Time Cost'}
               </button>
+              </div>
             </div>
           </section>
         </div>
@@ -1692,7 +1971,7 @@ export default function FinancePage() {
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">
-                  {editingFixedIncome ? 'Edit Fixed Income' : 'Add Fixed Income'}
+                  {editingFixedIncome ? 'Edit Recurring Income' : 'Add Recurring Income'}
                 </h3>
                 <p className="mt-1 text-xs text-slate-500">
                   Monthly recurring entry not linked to a load.
@@ -1804,7 +2083,7 @@ export default function FinancePage() {
               {editingFixedIncome && (
                 <button
                   type="button"
-                  onClick={() => void handleDeleteFixedIncome(editingFixedIncome.id)}
+                  onClick={() => void handleDeleteCustomIncome(editingFixedIncome.id, 'FIXED')}
                   disabled={isSubmitting || deletingFixedIncomeId === editingFixedIncome.id}
                   className="rounded border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
                 >
@@ -1830,7 +2109,155 @@ export default function FinancePage() {
                 className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
                 <Plus className="h-3.5 w-3.5" />
-                {editingFixedIncome ? 'Save Changes' : 'Add Income'}
+                {editingFixedIncome ? 'Save Recurring Income' : 'Add Recurring Income'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isOneTimeCustomIncomeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6"
+          onClick={() => {
+            if (!isSubmitting && !deletingFixedIncomeId) {
+              setIsOneTimeCustomIncomeModalOpen(false);
+              setEditingOneTimeIncome(null);
+              resetOneTimeCustomIncomeForm();
+            }
+          }}
+        >
+          <section
+            className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  {editingOneTimeIncome ? 'Edit One-Time Income' : 'Add One-Time Income'}
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  One-time custom income entry.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOneTimeCustomIncomeModalOpen(false);
+                  setEditingOneTimeIncome(null);
+                  resetOneTimeCustomIncomeForm();
+                }}
+                disabled={isSubmitting || Boolean(deletingFixedIncomeId)}
+                className="rounded border border-slate-300 bg-white p-1 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                title="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2">
+              <label className="text-xs text-slate-600 md:col-span-2">
+                Description
+                <input
+                  type="text"
+                  placeholder="Description"
+                  value={oneTimeCustomIncomeForm.description}
+                  onChange={(event) =>
+                    setOneTimeCustomIncomeForm((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Amount
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Amount"
+                  value={oneTimeCustomIncomeForm.amount}
+                  onChange={(event) =>
+                    setOneTimeCustomIncomeForm((prev) => ({ ...prev, amount: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+              <label className="text-xs text-slate-600">
+                Input Currency
+                <select
+                  value={oneTimeCustomIncomeForm.inputCurrency}
+                  onChange={(event) =>
+                    setOneTimeCustomIncomeForm((prev) => ({
+                      ...prev,
+                      inputCurrency: event.target.value as FixedIncomeInputCurrency,
+                    }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                >
+                  <option value="EUR">EUR</option>
+                  <option value="RSD">RSD</option>
+                </select>
+              </label>
+              {oneTimeCustomIncomeForm.inputCurrency === 'RSD' && (
+                <p className="md:col-span-2 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700">
+                  Converted and saved in EUR: {formatMoney(round2(toNumber(oneTimeCustomIncomeForm.amount) / RSD_TO_EUR_MULTIPLIER))} (RSD / 118)
+                </p>
+              )}
+              <label className="text-xs text-slate-600">
+                Date
+                <DateTimePicker
+                  mode="date"
+                  value={oneTimeCustomIncomeForm.incomeDate}
+                  onChange={(value) =>
+                    setOneTimeCustomIncomeForm((prev) => ({ ...prev, incomeDate: value }))
+                  }
+                  triggerClassName="mt-1"
+                />
+              </label>
+              <label className="text-xs text-slate-600 md:col-span-2">
+                Notes (optional)
+                <textarea
+                  placeholder="Notes"
+                  value={oneTimeCustomIncomeForm.notes}
+                  onChange={(event) =>
+                    setOneTimeCustomIncomeForm((prev) => ({ ...prev, notes: event.target.value }))
+                  }
+                  className="mt-1 min-h-20 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              {editingOneTimeIncome && (
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteCustomIncome(editingOneTimeIncome.id, 'ONE_TIME')}
+                  disabled={isSubmitting || deletingFixedIncomeId === editingOneTimeIncome.id}
+                  className="rounded border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                >
+                  Delete
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOneTimeCustomIncomeModalOpen(false);
+                  setEditingOneTimeIncome(null);
+                  resetOneTimeCustomIncomeForm();
+                }}
+                disabled={isSubmitting || Boolean(deletingFixedIncomeId)}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleAddOneTimeCustomIncome()}
+                disabled={isSubmitting || Boolean(deletingFixedIncomeId)}
+                className="inline-flex items-center justify-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {editingOneTimeIncome ? 'Save One-Time Income' : 'Add One-Time Income'}
               </button>
             </div>
           </section>

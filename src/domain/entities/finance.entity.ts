@@ -54,6 +54,7 @@ export interface CustomIncome extends BaseEntity {
   inputCurrency: 'EUR' | 'RSD' | null;
   incomeDate: string;
   dueDay: number;
+  isOneTime: boolean;
   stopDate: string | null;
   description: string;
   category: string | null;

@@ -47,6 +47,7 @@ export interface CreateCustomIncomeDto {
   inputCurrency?: 'EUR' | 'RSD';
   dueDay: number;
   incomeDate?: string;
+  isOneTime?: boolean;
   stopDate?: string;
   description: string;
   category?: string;
