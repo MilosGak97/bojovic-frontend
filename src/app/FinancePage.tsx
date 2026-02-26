@@ -22,6 +22,8 @@ type LedgerEvent = {
   label: string;
   amount: number;
   source?: 'PAYMENT' | 'CUSTOM';
+  editableType?: 'FIXED_EXPENSE' | 'FIXED_INCOME';
+  entityId?: string;
 };
 
 type VariableCostRow = {
@@ -46,6 +48,8 @@ type LoadPaymentRow = {
   paymentDate: string;
 };
 
+type FixedIncomeInputCurrency = 'EUR' | 'RSD';
+
 const FINANCE_TABS: Array<{ id: FinanceTab; label: string }> = [
   { id: 'CASH_FLOW', label: 'Cash Flow' },
   { id: 'LOAD_PAYMENTS', label: 'Load Payments' },
@@ -64,6 +68,8 @@ const SIMULATION_VIEW_OPTIONS: Array<{ id: SimulationView; label: string }> = [
   { id: 'VARIABLE_ONLY', label: 'Variable Cost' },
   { id: 'UPCOMING_INCOME_ONLY', label: 'Upcoming Income' },
 ];
+
+const RSD_TO_EUR_MULTIPLIER = 118;
 
 const toDateInput = (value: Date): string => value.toISOString().slice(0, 10);
 
@@ -333,7 +339,6 @@ export default function FinancePage() {
     dueDay: getDefaultDueDay(),
     stopDate: '',
     label: '',
-    vendor: '',
   });
 
   const [variableForm, setVariableForm] = useState({
@@ -341,16 +346,14 @@ export default function FinancePage() {
     amount: '',
     date: getDefaultFromDate(),
     label: '',
-    vendor: '',
   });
 
   const [customIncomeForm, setCustomIncomeForm] = useState({
     description: '',
     amount: '',
+    inputCurrency: 'EUR' as FixedIncomeInputCurrency,
     dueDay: getDefaultDueDay(),
     stopDate: '',
-    category: '',
-    referenceNumber: '',
     notes: '',
   });
 
@@ -358,10 +361,9 @@ export default function FinancePage() {
     setCustomIncomeForm({
       description: '',
       amount: '',
+      inputCurrency: 'EUR',
       dueDay: getDefaultDueDay(),
       stopDate: '',
-      category: '',
-      referenceNumber: '',
       notes: '',
     });
   }, []);
@@ -373,7 +375,6 @@ export default function FinancePage() {
       dueDay: getDefaultDueDay(),
       stopDate: '',
       label: '',
-      vendor: '',
     });
   }, []);
 
@@ -391,7 +392,6 @@ export default function FinancePage() {
       dueDay: getDueDayFromDate(expense.expenseDate),
       stopDate: toDateOnly(expense.stopDate),
       label: expense.recurringLabel ?? expense.description ?? '',
-      vendor: expense.vendor ?? '',
     });
     setIsFixedExpenseModalOpen(true);
   }, []);
@@ -403,14 +403,20 @@ export default function FinancePage() {
   }, [resetCustomIncomeForm]);
 
   const openEditFixedIncomeModal = useCallback((income: CustomIncome) => {
+    const inputCurrency: FixedIncomeInputCurrency =
+      income.inputCurrency === 'RSD' ? 'RSD' : 'EUR';
+    const inputAmount =
+      inputCurrency === 'RSD'
+        ? toNumber(income.inputAmount ?? income.amount)
+        : toNumber(income.amount);
+
     setEditingFixedIncome(income);
     setCustomIncomeForm({
       description: income.description ?? '',
-      amount: String(toNumber(income.amount)),
+      amount: String(inputAmount),
+      inputCurrency,
       dueDay: String(getIncomeDueDay(income)),
       stopDate: toDateOnly(income.stopDate),
-      category: income.category ?? '',
-      referenceNumber: income.referenceNumber ?? '',
       notes: income.notes ?? '',
     });
     setIsCustomIncomeModalOpen(true);
@@ -598,7 +604,7 @@ export default function FinancePage() {
       date: toDateOnly(expense.expenseDate) || getDefaultFromDate(),
       source: 'EXPENSE',
       category: expense.category,
-      label: expense.description ?? expense.vendor ?? expense.referenceNumber ?? expense.category,
+      label: expense.description ?? expense.referenceNumber ?? expense.category,
       status: expense.expenseType,
       amount: toNumber(expense.totalWithVat ?? expense.amount),
     }));
@@ -639,6 +645,8 @@ export default function FinancePage() {
       label: income.label,
       amount: toNumber(income.amount),
       source: 'CUSTOM',
+      editableType: 'FIXED_INCOME',
+      entityId: income.incomeId,
     }));
 
     const fixedEvents: LedgerEvent[] = fixedExpenses.map((expense) => ({
@@ -647,6 +655,8 @@ export default function FinancePage() {
       kind: 'FIXED',
       label: expense.recurringLabel ?? expense.description ?? expense.category,
       amount: toNumber(expense.totalWithVat ?? expense.amount),
+      editableType: 'FIXED_EXPENSE',
+      entityId: expense.id,
     }));
 
     const variableEvents: LedgerEvent[] = variableCostRows.map((row) => ({
@@ -733,7 +743,6 @@ export default function FinancePage() {
         expenseDate: toMonthlyAnchorDate(dueDayNumeric, editingFixedExpense?.expenseDate),
         recurrenceType: ExpenseRecurrence.MONTHLY,
         ...(fixedForm.label.trim() ? { recurringLabel: fixedForm.label.trim(), description: fixedForm.label.trim() } : {}),
-        ...(fixedForm.vendor.trim() ? { vendor: fixedForm.vendor.trim() } : {}),
         ...(fixedForm.stopDate ? { stopDate: fixedForm.stopDate } : { stopDate: null }),
         isRecurring: true,
       };
@@ -744,7 +753,7 @@ export default function FinancePage() {
         await expenseApi.create(payload);
       }
 
-      setFixedForm((prev) => ({ ...prev, amount: '', label: '', vendor: '' }));
+      setFixedForm((prev) => ({ ...prev, amount: '', label: '' }));
       setIsFixedExpenseModalOpen(false);
       setEditingFixedExpense(null);
       await loadData();
@@ -801,11 +810,10 @@ export default function FinancePage() {
         expenseDate: variableForm.date,
         recurrenceType: ExpenseRecurrence.ONE_TIME,
         ...(variableForm.label.trim() ? { description: variableForm.label.trim() } : {}),
-        ...(variableForm.vendor.trim() ? { vendor: variableForm.vendor.trim() } : {}),
         isRecurring: false,
       });
 
-      setVariableForm((prev) => ({ ...prev, amount: '', label: '', vendor: '' }));
+      setVariableForm((prev) => ({ ...prev, amount: '', label: '' }));
       setIsVariableCostModalOpen(false);
       await loadData();
     } catch (requestError) {
@@ -816,13 +824,17 @@ export default function FinancePage() {
   };
 
   const handleAddCustomIncome = async () => {
-    const amount = toNumber(customIncomeForm.amount);
+    const rawAmount = toNumber(customIncomeForm.amount);
+    const amount =
+      customIncomeForm.inputCurrency === 'RSD'
+        ? round2(rawAmount / RSD_TO_EUR_MULTIPLIER)
+        : rawAmount;
     const dueDay = Math.trunc(toNumber(customIncomeForm.dueDay));
     if (!customIncomeForm.description.trim()) {
       setError('Custom income description is required.');
       return;
     }
-    if (amount <= 0) {
+    if (rawAmount <= 0) {
       setError('Custom income amount must be greater than 0.');
       return;
     }
@@ -838,16 +850,12 @@ export default function FinancePage() {
       const payload = {
         amount,
         currency: Currency.EUR,
+        inputAmount: rawAmount,
+        inputCurrency: customIncomeForm.inputCurrency,
         dueDay,
         incomeDate: toMonthlyAnchorDate(dueDay, editingFixedIncome?.incomeDate),
         ...(customIncomeForm.stopDate ? { stopDate: customIncomeForm.stopDate } : {}),
         description: customIncomeForm.description.trim(),
-        ...(customIncomeForm.category.trim()
-          ? { category: customIncomeForm.category.trim() }
-          : {}),
-        ...(customIncomeForm.referenceNumber.trim()
-          ? { referenceNumber: customIncomeForm.referenceNumber.trim() }
-          : {}),
         ...(customIncomeForm.notes.trim()
           ? { notes: customIncomeForm.notes.trim() }
           : {}),
@@ -969,6 +977,25 @@ export default function FinancePage() {
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   };
 
+  const handleSimulationRowClick = (row: LedgerEvent) => {
+    if (!row.editableType || !row.entityId) return;
+
+    if (row.editableType === 'FIXED_EXPENSE') {
+      const expense = allExpenses.find((item) => item.id === row.entityId);
+      if (expense) {
+        openEditFixedExpenseModal(expense);
+      }
+      return;
+    }
+
+    if (row.editableType === 'FIXED_INCOME') {
+      const income = allCustomIncomes.find((item) => item.id === row.entityId);
+      if (income) {
+        openEditFixedIncomeModal(income);
+      }
+    }
+  };
+
   return (
     <main className="min-h-screen bg-slate-100">
       <ThinModuleMenu />
@@ -1056,14 +1083,13 @@ export default function FinancePage() {
                   <th className="px-2 py-1">Stop Date</th>
                   <th className="px-2 py-1">Label</th>
                   <th className="px-2 py-1">Category</th>
-                  <th className="px-2 py-1">Vendor</th>
                   <th className="px-2 py-1 text-right">Amount</th>
                 </tr>
               </thead>
               <tbody>
                 {fixedExpenses.length === 0 && (
                   <tr>
-                    <td className="px-2 py-3 text-slate-500" colSpan={6}>
+                    <td className="px-2 py-3 text-slate-500" colSpan={5}>
                       {isLoading ? 'Loading...' : 'No fixed expenses in selected range.'}
                     </td>
                   </tr>
@@ -1086,7 +1112,6 @@ export default function FinancePage() {
                         {expense.recurringLabel ?? expense.description ?? expense.category}
                       </td>
                       <td className="px-2 py-1.5 text-slate-700">{getExpenseCategoryLabel(expense.category)}</td>
-                      <td className="px-2 py-1.5 text-slate-700">{expense.vendor ?? '—'}</td>
                       <td className="px-2 py-1.5 text-right text-slate-800">
                         {formatMoney(toNumber(expense.totalWithVat ?? expense.amount))}
                       </td>
@@ -1094,7 +1119,7 @@ export default function FinancePage() {
                   ))}
                 {fixedExpenses.length > 0 && (
                   <tr className="border-t-2 border-slate-300 bg-slate-50">
-                    <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={5}>
+                    <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={4}>
                       Total
                     </td>
                     <td className="px-2 py-2 text-right text-sm font-semibold text-slate-900">
@@ -1126,15 +1151,13 @@ export default function FinancePage() {
                     <th className="px-2 py-1">Due Day</th>
                     <th className="px-2 py-1">Stop Date</th>
                     <th className="px-2 py-1">Description</th>
-                    <th className="px-2 py-1">Category</th>
-                    <th className="px-2 py-1">Reference</th>
                     <th className="px-2 py-1 text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fixedIncomeTemplates.length === 0 && (
                     <tr>
-                      <td className="px-2 py-3 text-slate-500" colSpan={6}>
+                      <td className="px-2 py-3 text-slate-500" colSpan={4}>
                         {isLoading ? 'Loading...' : 'No fixed income templates in selected range.'}
                       </td>
                     </tr>
@@ -1154,8 +1177,6 @@ export default function FinancePage() {
                           {income.stopDate ? formatDateCell(toDateOnly(income.stopDate)) : '—'}
                         </td>
                         <td className="px-2 py-1.5 font-medium text-slate-800">{income.description}</td>
-                        <td className="px-2 py-1.5 text-slate-700">{income.category ?? '—'}</td>
-                        <td className="px-2 py-1.5 text-slate-700">{income.referenceNumber ?? '—'}</td>
                         <td className="px-2 py-1.5 text-right text-emerald-700 font-medium">
                           {formatMoney(toNumber(income.amount))}
                         </td>
@@ -1163,7 +1184,7 @@ export default function FinancePage() {
                     ))}
                   {fixedIncomeTemplates.length > 0 && (
                     <tr className="border-t-2 border-slate-300 bg-slate-50">
-                      <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={5}>
+                      <td className="px-2 py-2 text-sm font-semibold text-slate-900" colSpan={3}>
                         Total (Monthly)
                       </td>
                       <td className="px-2 py-2 text-right text-sm font-semibold text-emerald-700">
@@ -1241,6 +1262,7 @@ export default function FinancePage() {
                 )}
                 {simulation.rows.map((row) => {
                   const isIncome = row.kind === 'INCOME';
+                  const isEditable = Boolean(row.editableType && row.entityId);
                   const typeLabel =
                     row.kind === 'INCOME'
                       ? row.source === 'CUSTOM'
@@ -1248,7 +1270,12 @@ export default function FinancePage() {
                         : 'INCOME (PAYMENT)'
                       : row.kind;
                   return (
-                    <tr key={row.id} className="border-t border-slate-100">
+                    <tr
+                      key={row.id}
+                      className={`border-t border-slate-100 ${isEditable ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+                      onClick={isEditable ? () => handleSimulationRowClick(row) : undefined}
+                      title={isEditable ? 'Click to edit' : undefined}
+                    >
                       <td className="px-2 py-1.5 text-slate-700">{formatDateCell(row.date)}</td>
                       <td className="px-2 py-1.5 text-slate-700">{typeLabel}</td>
                       <td className="px-2 py-1.5 text-slate-800">{row.label}</td>
@@ -1508,16 +1535,6 @@ export default function FinancePage() {
                   className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
-              <label className="text-xs text-slate-600 md:col-span-2">
-                Vendor
-                <input
-                  type="text"
-                  placeholder="Vendor"
-                  value={fixedForm.vendor}
-                  onChange={(event) => setFixedForm((prev) => ({ ...prev, vendor: event.target.value }))}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
             </div>
 
             <div className="mt-4 flex items-center justify-between gap-2">
@@ -1632,16 +1649,6 @@ export default function FinancePage() {
                   className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />
               </label>
-              <label className="text-xs text-slate-600 md:col-span-2">
-                Vendor
-                <input
-                  type="text"
-                  placeholder="Vendor"
-                  value={variableForm.vendor}
-                  onChange={(event) => setVariableForm((prev) => ({ ...prev, vendor: event.target.value }))}
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
@@ -1734,6 +1741,27 @@ export default function FinancePage() {
                 />
               </label>
               <label className="text-xs text-slate-600">
+                Input Currency
+                <select
+                  value={customIncomeForm.inputCurrency}
+                  onChange={(event) =>
+                    setCustomIncomeForm((prev) => ({
+                      ...prev,
+                      inputCurrency: event.target.value as FixedIncomeInputCurrency,
+                    }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                >
+                  <option value="EUR">EUR</option>
+                  <option value="RSD">RSD</option>
+                </select>
+              </label>
+              {customIncomeForm.inputCurrency === 'RSD' && (
+                <p className="md:col-span-2 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700">
+                  Converted and saved in EUR: {formatMoney(round2(toNumber(customIncomeForm.amount) / RSD_TO_EUR_MULTIPLIER))} (RSD / 118)
+                </p>
+              )}
+              <label className="text-xs text-slate-600">
                 Due Day (1-31)
                 <input
                   type="number"
@@ -1744,30 +1772,6 @@ export default function FinancePage() {
                   value={customIncomeForm.dueDay}
                   onChange={(event) =>
                     setCustomIncomeForm((prev) => ({ ...prev, dueDay: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
-              <label className="text-xs text-slate-600">
-                Category (optional)
-                <input
-                  type="text"
-                  placeholder="Category"
-                  value={customIncomeForm.category}
-                  onChange={(event) =>
-                    setCustomIncomeForm((prev) => ({ ...prev, category: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
-                />
-              </label>
-              <label className="text-xs text-slate-600">
-                Reference (optional)
-                <input
-                  type="text"
-                  placeholder="Reference"
-                  value={customIncomeForm.referenceNumber}
-                  onChange={(event) =>
-                    setCustomIncomeForm((prev) => ({ ...prev, referenceNumber: event.target.value }))
                   }
                   className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
                 />

@@ -19,7 +19,6 @@ export interface Expense extends BaseEntity {
   receiptUrl: string | null;
   isRecurring: boolean;
   recurringLabel: string | null;
-  vendor: string | null;
   referenceNumber: string | null;
   notes: string | null;
   vanId: string | null;
@@ -51,6 +50,8 @@ export interface DriverPayRecord extends BaseEntity {
 export interface CustomIncome extends BaseEntity {
   amount: number;
   currency: Currency;
+  inputAmount: number | null;
+  inputCurrency: 'EUR' | 'RSD' | null;
   incomeDate: string;
   dueDay: number;
   stopDate: string | null;

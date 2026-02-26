@@ -15,7 +15,6 @@ export interface CreateExpenseDto {
   isRecurring?: boolean;
   recurrenceType?: ExpenseRecurrence;
   recurringLabel?: string;
-  vendor?: string;
   referenceNumber?: string;
   notes?: string;
   vanId?: string;
@@ -44,6 +43,8 @@ export type UpdateDriverPayRecordDto = Partial<CreateDriverPayRecordDto>;
 export interface CreateCustomIncomeDto {
   amount: number;
   currency?: Currency;
+  inputAmount?: number;
+  inputCurrency?: 'EUR' | 'RSD';
   dueDay: number;
   incomeDate?: string;
   stopDate?: string;
