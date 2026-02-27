@@ -179,7 +179,7 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
   const plannerLoad: PlannerLoad = {
     id: apiLoad.id,
     referenceCode: apiLoad.referenceNumber,
-    brokerage: apiLoad.broker?.companyName ?? 'Brokerage not set',
+    brokerage: apiLoad.broker?.companyName ?? apiLoad.brokerageName ?? 'Brokerage not set',
     originCity: apiLoad.pickupCity,
     destCity: apiLoad.deliveryCity,
     pickupDate: toDateOnly(apiLoad.pickupDateFrom),

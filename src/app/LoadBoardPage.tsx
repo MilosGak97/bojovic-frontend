@@ -570,7 +570,7 @@ export default function LoadBoardPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-slate-700">
-                        {load.broker?.companyName || '—'}
+                        {load.broker?.companyName || load.brokerageName || '—'}
                       </td>
                       <td className="px-3 py-2 text-slate-700">
                         {formatLocation(load.pickupCountry, load.pickupPostcode, load.pickupCity)}

@@ -130,6 +130,7 @@ export function UploadModal({
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
   const [isLoadingTrips, setIsLoadingTrips] = useState(false);
   const [tripsError, setTripsError] = useState<string | null>(null);
@@ -238,6 +239,20 @@ export function UploadModal({
       cancelled = true;
     };
   }, [isOpen, defaultTripId]);
+
+  useEffect(() => {
+    if (!pdfFile) {
+      setPdfPreviewUrl(null);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(pdfFile);
+    setPdfPreviewUrl(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [pdfFile]);
 
   if (!isOpen) return null;
 
@@ -778,55 +793,85 @@ export function UploadModal({
           )}
 
           {activeTab === 'pdf' && (
-            <div className="rounded-lg border border-dashed border-gray-300 p-10 text-center">
-              <Upload className="mx-auto mb-4 h-10 w-10 text-gray-400" />
-              <p className="text-sm text-gray-700">Upload Trans.eu freight PDF and create load.</p>
-              <p className="mt-1 text-xs text-gray-500">
-                Parsed data is used to create a load directly in route planner.
-              </p>
-              <label
-                htmlFor="freight-pdf-upload"
-                className="mt-4 inline-flex cursor-pointer rounded bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-700"
-              >
-                Select PDF
-              </label>
-              <input
-                id="freight-pdf-upload"
-                type="file"
-                accept=".pdf,application/pdf"
-                className="hidden"
-                onChange={(event) => setPdfFile(event.target.files?.[0] ?? null)}
-              />
-              {pdfFile && (
-                <p className="mt-3 text-xs text-gray-600">
-                  Selected: {pdfFile.name} ({Math.max(1, Math.round(pdfFile.size / 1024))} KB)
+            <div className="space-y-4">
+              <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center">
+                <Upload className="mx-auto mb-3 h-9 w-9 text-gray-400" />
+                <p className="text-sm text-gray-700">Upload Trans.eu freight PDF and create load.</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Parsed data is used to create a load directly in route planner.
                 </p>
-              )}
-              <div className="mx-auto mt-4 max-w-sm text-left">
-                <label className="block text-xs text-gray-600">
-                  Add To Load Planner (Trip)
-                  <select
-                    value={form.tripId}
-                    onChange={(event) => updateForm('tripId', event.target.value)}
-                    disabled={isLoadingTrips}
-                    className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 disabled:bg-gray-100"
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                  <label
+                    htmlFor="freight-pdf-upload"
+                    className="inline-flex cursor-pointer rounded bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-700"
                   >
-                    <option value="">Not assigned</option>
-                    {activeTrips.map((trip) => {
-                      const driverName = trip.driver
-                        ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
-                        : 'No driver';
-                      const vanInfo = trip.van
-                        ? `${trip.van.name} (${trip.van.licensePlate})`
-                        : 'No vehicle';
-                      return (
-                        <option key={trip.id} value={trip.id}>
-                          {driverName} — {vanInfo}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </label>
+                    Select PDF
+                  </label>
+                  <input
+                    id="freight-pdf-upload"
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    className="hidden"
+                    onChange={(event) => setPdfFile(event.target.files?.[0] ?? null)}
+                  />
+                  {pdfPreviewUrl && (
+                    <button
+                      type="button"
+                      onClick={() => window.open(pdfPreviewUrl, '_blank', 'noopener,noreferrer')}
+                      className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                    >
+                      Quick View
+                    </button>
+                  )}
+                </div>
+                {pdfFile && (
+                  <p className="mt-3 text-xs text-gray-600">
+                    Selected: {pdfFile.name} ({Math.max(1, Math.round(pdfFile.size / 1024))} KB)
+                  </p>
+                )}
+                <div className="mx-auto mt-4 max-w-sm text-left">
+                  <label className="block text-xs text-gray-600">
+                    Add To Load Planner (Trip)
+                    <select
+                      value={form.tripId}
+                      onChange={(event) => updateForm('tripId', event.target.value)}
+                      disabled={isLoadingTrips}
+                      className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 disabled:bg-gray-100"
+                    >
+                      <option value="">Not assigned</option>
+                      {activeTrips.map((trip) => {
+                        const driverName = trip.driver
+                          ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+                          : 'No driver';
+                        const vanInfo = trip.van
+                          ? `${trip.van.name} (${trip.van.licensePlate})`
+                          : 'No vehicle';
+                        return (
+                          <option key={trip.id} value={trip.id}>
+                            {driverName} — {vanInfo}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+                <div className="border-b border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600">
+                  PDF Preview
+                </div>
+                {pdfPreviewUrl ? (
+                  <iframe
+                    title="PDF quick preview"
+                    src={pdfPreviewUrl}
+                    className="h-[52vh] w-full bg-white"
+                  />
+                ) : (
+                  <div className="flex h-40 items-center justify-center px-4 text-xs text-gray-500">
+                    Select a PDF to preview it here.
+                  </div>
+                )}
               </div>
             </div>
           )}
