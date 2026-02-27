@@ -11,7 +11,7 @@ import type {
   PaymentRecord,
   PaymentWorkflow as PaymentWorkflowEntity,
 } from '../domain/entities';
-import type { CreatePaymentWorkflowDto } from '../domain/dto';
+import type { CreateDocumentDto, CreatePaymentWorkflowDto } from '../domain/dto';
 import {
   ContactRole,
   DocumentCategory,
@@ -133,6 +133,15 @@ type BrokerOtherDraft = {
 
 type BrokerEditModalSection = 'main' | 'transEu' | 'other';
 
+type AddLoadDocumentDraft = {
+  documentType: DocumentType;
+  title: string;
+  documentNumber: string;
+  issuedAt: string;
+  validUntil: string;
+  notes: string;
+};
+
 const SECTION_ITEMS: Array<{ id: LoadDetailSection; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'broker', label: 'Broker' },
@@ -153,6 +162,8 @@ const CONTACT_ROLE_OPTIONS: ContactRole[] = [
   ContactRole.DRIVER_COORDINATOR,
   ContactRole.OTHER,
 ];
+
+const DOCUMENT_TYPE_OPTIONS = Object.values(DocumentType) as DocumentType[];
 
 const ACTIVITY_FILTER_ITEMS: Array<{ id: ActivityFilter; label: string }> = [
   { id: 'ALL', label: 'All' },
@@ -586,6 +597,18 @@ export default function LoadDetailPage() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingPaymentDetails, setIsSavingPaymentDetails] = useState(false);
+  const [isAddDocumentModalOpen, setIsAddDocumentModalOpen] = useState(false);
+  const [isSavingDocument, setIsSavingDocument] = useState(false);
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [documentUploadFile, setDocumentUploadFile] = useState<File | null>(null);
+  const [addDocumentDraft, setAddDocumentDraft] = useState<AddLoadDocumentDraft>({
+    documentType: DocumentType.CMR,
+    title: '',
+    documentNumber: '',
+    issuedAt: getTodayDateInput(),
+    validUntil: '',
+    notes: '',
+  });
   const [copiedDocumentId, setCopiedDocumentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -734,6 +757,83 @@ export default function LoadDetailPage() {
       }, 1400);
     } catch {
       setError('Failed to copy document link.');
+    }
+  };
+
+  const handleDeleteDocument = async (document: Document) => {
+    const confirmed = window.confirm(`Delete document "${document.title}"?`);
+    if (!confirmed) return;
+
+    setDeletingDocumentId(document.id);
+    setError(null);
+    try {
+      await documentApi.delete(document.id);
+      setDocuments((prev) => prev.filter((item) => item.id !== document.id));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to delete document.');
+    } finally {
+      setDeletingDocumentId(null);
+    }
+  };
+
+  const openAddDocumentModal = () => {
+    setAddDocumentDraft({
+      documentType: DocumentType.CMR,
+      title: '',
+      documentNumber: '',
+      issuedAt: getTodayDateInput(),
+      validUntil: '',
+      notes: '',
+    });
+    setDocumentUploadFile(null);
+    setIsAddDocumentModalOpen(true);
+  };
+
+  const closeAddDocumentModal = () => {
+    if (isSavingDocument) return;
+    setIsAddDocumentModalOpen(false);
+    setDocumentUploadFile(null);
+  };
+
+  const saveDocumentForLoad = async () => {
+    if (!loadId) {
+      setError('Load ID is missing.');
+      return;
+    }
+    if (!documentUploadFile) {
+      setError('Select a file before saving document.');
+      return;
+    }
+
+    setIsSavingDocument(true);
+    setError(null);
+    try {
+      const uploaded = await documentApi.upload(documentUploadFile);
+      const payload: CreateDocumentDto = {
+        category: DocumentCategory.LOAD,
+        loadId,
+        documentType: addDocumentDraft.documentType,
+        title:
+          addDocumentDraft.title.trim() ||
+          `${addDocumentDraft.documentType} - ${load?.referenceNumber ?? uploaded.fileName}`,
+        fileName: uploaded.fileName,
+        filePath: uploaded.filePath,
+        mimeType: uploaded.mimeType,
+        fileSizeBytes: uploaded.fileSizeBytes ?? undefined,
+        documentNumber: nullableString(addDocumentDraft.documentNumber) ?? undefined,
+        issuedAt: normalizeNullableDate(addDocumentDraft.issuedAt) ?? undefined,
+        validUntil: normalizeNullableDate(addDocumentDraft.validUntil) ?? undefined,
+        notes: nullableString(addDocumentDraft.notes) ?? undefined,
+      };
+      await documentApi.create(payload);
+      const nextDocuments = await documentApi.getByEntity(DocumentCategory.LOAD, loadId);
+      setDocuments(nextDocuments);
+      setIsAddDocumentModalOpen(false);
+      setDocumentUploadFile(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to upload document.');
+    } finally {
+      setIsSavingDocument(false);
     }
   };
 
@@ -3118,7 +3218,16 @@ export default function LoadDetailPage() {
 
             {activeSection === 'documents' && (
               <div>
-                <h2 className="mb-3 text-sm font-semibold text-slate-900">Documents</h2>
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold text-slate-900">Documents</h2>
+                  <button
+                    type="button"
+                    onClick={openAddDocumentModal}
+                    className="rounded border border-slate-900 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-800"
+                  >
+                    Add Document
+                  </button>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
                     <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
@@ -3128,12 +3237,13 @@ export default function LoadDetailPage() {
                         <th className="px-2 py-1">Issued</th>
                         <th className="px-2 py-1">Valid Until</th>
                         <th className="px-2 py-1">File</th>
+                        <th className="px-2 py-1">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {documents.length === 0 && (
                         <tr>
-                          <td className="px-2 py-3 text-slate-500" colSpan={5}>
+                          <td className="px-2 py-3 text-slate-500" colSpan={6}>
                             No documents attached to this load yet.
                           </td>
                         </tr>
@@ -3145,10 +3255,12 @@ export default function LoadDetailPage() {
                           <td className="px-2 py-1.5 text-slate-700">{formatDate(document.issuedAt)}</td>
                           <td className="px-2 py-1.5 text-slate-700">{formatDate(document.validUntil)}</td>
                           <td className="px-2 py-1.5 text-slate-700">
+                            <span className="inline-block max-w-[240px] truncate" title={document.fileName}>
+                              {document.fileName}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-slate-700">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="max-w-[220px] truncate" title={document.fileName}>
-                                {document.fileName}
-                              </span>
                               <button
                                 type="button"
                                 onClick={() => handleViewDocument(document)}
@@ -3164,6 +3276,14 @@ export default function LoadDetailPage() {
                                 className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                               >
                                 {copiedDocumentId === document.id ? 'Copied' : 'Copy Link'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteDocument(document)}
+                                disabled={deletingDocumentId === document.id}
+                                className="rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                              >
+                                {deletingDocumentId === document.id ? 'Deleting...' : 'Delete'}
                               </button>
                             </div>
                           </td>
@@ -3971,6 +4091,147 @@ export default function LoadDetailPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isAddDocumentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Documents</p>
+                <h3 className="text-base font-semibold text-slate-900">Add Document</h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeAddDocumentModal}
+                disabled={isSavingDocument}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-slate-600">
+                Type
+                <select
+                  value={addDocumentDraft.documentType}
+                  onChange={(event) =>
+                    setAddDocumentDraft((prev) => ({
+                      ...prev,
+                      documentType: event.target.value as DocumentType,
+                    }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                >
+                  {DOCUMENT_TYPE_OPTIONS.map((documentType) => (
+                    <option key={documentType} value={documentType}>
+                      {documentType}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-xs text-slate-600">
+                Issued Date
+                <input
+                  type="date"
+                  value={addDocumentDraft.issuedAt}
+                  onChange={(event) =>
+                    setAddDocumentDraft((prev) => ({ ...prev, issuedAt: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+
+              <label className="text-xs text-slate-600 sm:col-span-2">
+                Title
+                <input
+                  type="text"
+                  value={addDocumentDraft.title}
+                  onChange={(event) =>
+                    setAddDocumentDraft((prev) => ({ ...prev, title: event.target.value }))
+                  }
+                  placeholder="e.g. CMR - L001"
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+
+              <label className="text-xs text-slate-600">
+                Document Number
+                <input
+                  type="text"
+                  value={addDocumentDraft.documentNumber}
+                  onChange={(event) =>
+                    setAddDocumentDraft((prev) => ({
+                      ...prev,
+                      documentNumber: event.target.value,
+                    }))
+                  }
+                  placeholder="Optional"
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+
+              <label className="text-xs text-slate-600">
+                Valid Until
+                <input
+                  type="date"
+                  value={addDocumentDraft.validUntil}
+                  onChange={(event) =>
+                    setAddDocumentDraft((prev) => ({ ...prev, validUntil: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+
+              <label className="text-xs text-slate-600 sm:col-span-2">
+                File
+                <input
+                  type="file"
+                  accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.txt,.csv"
+                  onChange={(event) => setDocumentUploadFile(event.target.files?.[0] ?? null)}
+                  className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {documentUploadFile ? documentUploadFile.name : 'No file selected'}
+                </p>
+              </label>
+
+              <label className="text-xs text-slate-600 sm:col-span-2">
+                Notes
+                <textarea
+                  value={addDocumentDraft.notes}
+                  onChange={(event) =>
+                    setAddDocumentDraft((prev) => ({ ...prev, notes: event.target.value }))
+                  }
+                  rows={3}
+                  placeholder="Optional"
+                  className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeAddDocumentModal}
+                disabled={isSavingDocument}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveDocumentForLoad()}
+                disabled={isSavingDocument || !documentUploadFile}
+                className="rounded border border-slate-900 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {isSavingDocument ? 'Uploading...' : 'Upload Document'}
+              </button>
             </div>
           </div>
         </div>

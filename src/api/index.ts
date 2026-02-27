@@ -61,6 +61,13 @@ export const loadApi = {
   },
   getOne: (id: string) => api.get<Load>(`/loads/${id}`),
   create: (data: unknown) => api.post<Load>('/loads', data),
+  createFromPdf: (file: File, options?: { tripId?: string; status?: LoadStatus }) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.tripId) formData.append('tripId', options.tripId);
+    if (options?.status) formData.append('status', options.status);
+    return api.postForm<Load>('/loads/intake/pdf', formData);
+  },
   update: (id: string, data: unknown) => api.put<Load>(`/loads/${id}`, data),
   updateStatus: (id: string, status: LoadStatus) =>
     api.patch<Load>(`/loads/${id}/status`, { status }),

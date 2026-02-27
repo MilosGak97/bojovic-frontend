@@ -700,6 +700,31 @@ export function UploadModal({
     }
   };
 
+  const handleCreateFromPdf = async () => {
+    setFormError(null);
+    setSuccessMessage(null);
+    if (!pdfFile) {
+      setFormError('Select a PDF file first.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const createdLoad = await loadApi.createFromPdf(pdfFile, {
+        ...(form.tripId ? { tripId: form.tripId } : {}),
+        status: form.status,
+      });
+      onCreated?.(createdLoad);
+      setSuccessMessage(`Freight ${createdLoad.referenceNumber} created from PDF.`);
+      resetFormState();
+      onClose();
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Failed to parse PDF and create freight.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
@@ -708,7 +733,7 @@ export function UploadModal({
         <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Freight Intake</h2>
-            <p className="text-xs text-gray-500">Create manually now, PDF parser next.</p>
+            <p className="text-xs text-gray-500">Create manually or parse from PDF.</p>
           </div>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600">
             <X className="h-5 w-5" />
@@ -741,12 +766,23 @@ export function UploadModal({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          {formError && (
+            <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {formError}
+            </div>
+          )}
+          {successMessage && (
+            <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+              {successMessage}
+            </div>
+          )}
+
           {activeTab === 'pdf' && (
             <div className="rounded-lg border border-dashed border-gray-300 p-10 text-center">
               <Upload className="mx-auto mb-4 h-10 w-10 text-gray-400" />
-              <p className="text-sm text-gray-700">PDF upload parser integration is next.</p>
+              <p className="text-sm text-gray-700">Upload Trans.eu freight PDF and create load.</p>
               <p className="mt-1 text-xs text-gray-500">
-                You can already create freight manually in the other tab.
+                Parsed data is used to create a load directly in route planner.
               </p>
               <label
                 htmlFor="freight-pdf-upload"
@@ -766,22 +802,37 @@ export function UploadModal({
                   Selected: {pdfFile.name} ({Math.max(1, Math.round(pdfFile.size / 1024))} KB)
                 </p>
               )}
+              <div className="mx-auto mt-4 max-w-sm text-left">
+                <label className="block text-xs text-gray-600">
+                  Add To Load Planner (Trip)
+                  <select
+                    value={form.tripId}
+                    onChange={(event) => updateForm('tripId', event.target.value)}
+                    disabled={isLoadingTrips}
+                    className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 disabled:bg-gray-100"
+                  >
+                    <option value="">Not assigned</option>
+                    {activeTrips.map((trip) => {
+                      const driverName = trip.driver
+                        ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+                        : 'No driver';
+                      const vanInfo = trip.van
+                        ? `${trip.van.name} (${trip.van.licensePlate})`
+                        : 'No vehicle';
+                      return (
+                        <option key={trip.id} value={trip.id}>
+                          {driverName} — {vanInfo}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+              </div>
             </div>
           )}
 
           {activeTab === 'manual' && (
             <div className="space-y-6">
-              {formError && (
-                <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  {formError}
-                </div>
-              )}
-              {successMessage && (
-                <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-                  {successMessage}
-                </div>
-              )}
-
               <section className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                 <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
                   Load Info
@@ -1528,10 +1579,12 @@ export function UploadModal({
             </button>
           ) : (
             <button
-              disabled
-              className="rounded bg-gray-300 px-4 py-2 text-sm font-medium text-gray-600"
+              onClick={() => void handleCreateFromPdf()}
+              disabled={isSubmitting || !pdfFile}
+              className="inline-flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              PDF Processing Soon
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Create From PDF
             </button>
           )}
         </div>
