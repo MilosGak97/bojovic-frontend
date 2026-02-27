@@ -1963,6 +1963,46 @@ export default function App() {
                                     </div>
                                   )}
 
+                                  {(load.bodySize ||
+                                    load.freightMode ||
+                                    load.bodyTypeText ||
+                                    typeof load.capacityTons === 'number' ||
+                                    typeof load.loadingMeters === 'number') && (
+                                    <div className="mt-1.5 space-y-0.5 rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-[10px] leading-4 text-gray-700">
+                                      {load.bodySize && (
+                                        <p>
+                                          <span className="font-semibold text-gray-600">Body size: </span>
+                                          {load.bodySize}
+                                        </p>
+                                      )}
+                                      {load.freightMode && (
+                                        <p>
+                                          <span className="font-semibold text-gray-600">Mode: </span>
+                                          {load.freightMode}
+                                        </p>
+                                      )}
+                                      {load.bodyTypeText && (
+                                        <p>
+                                          <span className="font-semibold text-gray-600">Body type: </span>
+                                          {load.bodyTypeText}
+                                        </p>
+                                      )}
+                                      {typeof load.capacityTons === 'number' && Number.isFinite(load.capacityTons) && (
+                                        <p>
+                                          <span className="font-semibold text-gray-600">Capacity: </span>
+                                          {load.capacityTons.toFixed(3)} t
+                                        </p>
+                                      )}
+                                      {typeof load.loadingMeters === 'number' &&
+                                        Number.isFinite(load.loadingMeters) && (
+                                        <p>
+                                          <span className="font-semibold text-gray-600">Loading meters: </span>
+                                          {load.loadingMeters.toFixed(2)} ldm
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+
                                   <div className="mt-2 grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-[11px] font-semibold text-gray-800 tabular-nums">
                                     <span className="text-left">{load.distance} km</span>
                                     <span className="pl-1 text-left">{pricePerKm.toFixed(2)}€/km</span>

@@ -45,26 +45,8 @@ const toDateOnly = (value?: string | null): string => {
   return trimmed;
 };
 
-const FILES_PUBLIC_BASE = API_BASE.replace(/\/api\/?$/, '');
-
-const getAbsoluteFileBase = (): string => {
-  if (/^https?:\/\//i.test(FILES_PUBLIC_BASE)) {
-    return FILES_PUBLIC_BASE.replace(/\/+$/, '');
-  }
-  const normalizedBase = FILES_PUBLIC_BASE.startsWith('/')
-    ? FILES_PUBLIC_BASE
-    : `/${FILES_PUBLIC_BASE}`;
-  return `${window.location.origin}${normalizedBase}`.replace(/\/+$/, '');
-};
-
-const buildPublicFileUrl = (filePath: string): string => {
-  const trimmed = filePath.trim();
-  if (!trimmed) return '';
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  const fileBase = getAbsoluteFileBase();
-  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-  return `${fileBase}${encodeURI(normalizedPath)}`;
-};
+const buildDocumentOpenUrl = (documentId: string): string =>
+  `${API_BASE}/documents/${encodeURIComponent(documentId)}/open`;
 
 const normalizeDateInput = (value: string | undefined, fallback: string): string => {
   const trimmed = value?.trim();
@@ -166,8 +148,8 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
     .filter(
       (document) =>
         document.documentType === DocumentType.FREIGHT_ORDER &&
-        typeof document.filePath === 'string' &&
-        document.filePath.trim().length > 0,
+        typeof document.id === 'string' &&
+        document.id.trim().length > 0,
     )
     .sort(
       (a, b) =>
@@ -175,12 +157,22 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
         new Date(a.createdAt).getTime(),
     )[0];
   const sourceFreightPdfUrl = latestFreightPdfDocument
-    ? buildPublicFileUrl(latestFreightPdfDocument.filePath)
+    ? buildDocumentOpenUrl(latestFreightPdfDocument.id)
     : undefined;
   const additionalDescription =
     apiLoad.freightDetails?.goodsDescription?.trim() ||
     apiLoad.notes?.trim() ||
     undefined;
+  const capacityTons =
+    typeof apiLoad.freightDetails?.weightTons === 'number' &&
+    Number.isFinite(apiLoad.freightDetails.weightTons)
+      ? apiLoad.freightDetails.weightTons
+      : undefined;
+  const loadingMeters =
+    typeof apiLoad.freightDetails?.loadingMeters === 'number' &&
+    Number.isFinite(apiLoad.freightDetails.loadingMeters)
+      ? apiLoad.freightDetails.loadingMeters
+      : undefined;
 
   const palletDimensions = (apiLoad.pallets ?? []).flatMap((pallet) => {
     const quantity = Math.max(1, pallet.quantity ?? 1);
@@ -253,6 +245,14 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
     tripId: apiLoad.tripId ?? undefined,
     additionalDescription,
     sourceFreightPdfUrl,
+    bodySize: apiLoad.freightDetails?.bodySize?.trim() || undefined,
+    freightMode: apiLoad.freightDetails?.freightMode?.trim() || undefined,
+    bodyTypeText:
+      apiLoad.freightDetails?.bodyTypeText?.trim() ||
+      apiLoad.freightDetails?.bodyType?.toLowerCase().replace(/_/g, ' ') ||
+      undefined,
+    capacityTons,
+    loadingMeters,
     palletDimensions,
     extraStops: getExtraStopsFromApi(apiLoad),
   };

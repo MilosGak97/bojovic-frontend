@@ -94,6 +94,9 @@ export interface LoadFreightDetails extends BaseEntity {
   volumeM3: number | null;
   palletCount: number | null;
   bodyType: BodyType | null;
+  bodyTypeText: string | null;
+  bodySize: string | null;
+  freightMode: string | null;
   isStackable: boolean;
   isHazardous: boolean;
   adrClass: string | null;

@@ -31,6 +31,9 @@ export interface CreateLoadFreightDto {
   volumeM3?: number;
   palletCount?: number;
   bodyType?: BodyType;
+  bodyTypeText?: string;
+  bodySize?: string;
+  freightMode?: string;
   isStackable?: boolean;
   isHazardous?: boolean;
   adrClass?: string;

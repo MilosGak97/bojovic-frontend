@@ -31,6 +31,11 @@ export interface PlannerLoad {
   tripId?: string;
   additionalDescription?: string;
   sourceFreightPdfUrl?: string;
+  bodySize?: string;
+  freightMode?: string;
+  bodyTypeText?: string;
+  capacityTons?: number;
+  loadingMeters?: number;
   palletDimensions?: Array<{
     width: number;
     height: number;
