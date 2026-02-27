@@ -29,6 +29,8 @@ export interface PlannerLoad {
   paymentTerms?: string;
   isInactive?: boolean;
   tripId?: string;
+  additionalDescription?: string;
+  sourceFreightPdfUrl?: string;
   palletDimensions?: Array<{
     width: number;
     height: number;

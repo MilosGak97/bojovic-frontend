@@ -55,6 +55,21 @@ const formatMoney = (value: number): string =>
   }).format(toNumber(value));
 
 const formatDateTime = (value?: string | null): string => formatSerbiaDateTime(value, '—');
+const formatRoutePoint = (
+  country?: string | null,
+  postcode?: string | null,
+  city?: string | null,
+): string => {
+  const cc = (country ?? '—').toUpperCase();
+  const zip = postcode ?? '—';
+  const place = city ?? '—';
+  return `${cc}, ${zip}, ${place}`;
+};
+
+const formatDistanceKm = (value?: number | null): string => {
+  const km = toNumber(value);
+  return km > 0 ? `${km.toLocaleString('de-DE')} km` : '—';
+};
 
 const getTripKm = (trip: Trip): number | null => {
   if (trip.startOdometerKm === null || trip.endOdometerKm === null) return null;
@@ -133,15 +148,20 @@ export default function TripDetailPage() {
   }, [refreshData]);
 
   const tripLoads = useMemo(() => trip?.loads ?? [], [trip]);
+  const tripLoadsForTable = useMemo(
+    () =>
+      tripLoads.filter((load) => load.status === LoadStatus.TAKEN),
+    [tripLoads],
+  );
 
   const latestPaymentByLoad = useMemo(() => {
-    const loadIds = new Set(tripLoads.map((load) => load.id));
+    const loadIds = new Set(tripLoadsForTable.map((load) => load.id));
     return getLatestPaymentByLoad(allPayments, loadIds);
-  }, [allPayments, tripLoads]);
+  }, [allPayments, tripLoadsForTable]);
 
   const expectedRevenue = useMemo(
-    () => tripLoads.reduce((sum, load) => sum + resolveLoadAmount(load), 0),
-    [tripLoads],
+    () => tripLoadsForTable.reduce((sum, load) => sum + resolveLoadAmount(load), 0),
+    [tripLoadsForTable],
   );
 
   const paidIn = useMemo(() => {
@@ -334,7 +354,7 @@ export default function TripDetailPage() {
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">Loads In Trip</dt>
-                  <dd className="mt-0.5 font-medium text-slate-900">{tripLoads.length}</dd>
+                  <dd className="mt-0.5 font-medium text-slate-900">{tripLoadsForTable.length}</dd>
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">KM</dt>
@@ -375,7 +395,9 @@ export default function TripDetailPage() {
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-3 py-2">Reference</th>
+                    <th className="px-3 py-2">Brokerage</th>
                     <th className="px-3 py-2">Route</th>
+                    <th className="px-3 py-2 text-right">KM</th>
                     <th className="px-3 py-2">Load Status</th>
                     <th className="px-3 py-2 text-right">Load Price</th>
                     <th className="px-3 py-2">Payment Status</th>
@@ -387,29 +409,36 @@ export default function TripDetailPage() {
                 <tbody>
                   {isLoading && (
                     <tr>
-                      <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                      <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
                         Loading trip loads...
                       </td>
                     </tr>
                   )}
 
-                  {!isLoading && tripLoads.length === 0 && (
+                  {!isLoading && tripLoadsForTable.length === 0 && (
                     <tr>
-                      <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                        No loads assigned to this trip yet.
+                      <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
+                        No taken loads in this trip.
                       </td>
                     </tr>
                   )}
 
                   {!isLoading &&
-                    tripLoads.map((load) => {
+                    tripLoadsForTable.map((load) => {
                       const payment = latestPaymentByLoad.get(load.id) ?? null;
                       const paymentAmount = toNumber(payment?.totalWithVat ?? payment?.amount);
                       return (
                         <tr key={load.id} className="border-t border-slate-100">
                           <td className="px-3 py-2 font-medium text-slate-900">{load.referenceNumber}</td>
                           <td className="px-3 py-2 text-slate-700">
-                            {load.pickupCity} → {load.deliveryCity}
+                            {load.broker?.companyName ?? load.brokerageName ?? '—'}
+                          </td>
+                          <td className="px-3 py-2 text-slate-700">
+                            {formatRoutePoint(load.pickupCountry, load.pickupPostcode, load.pickupCity)} →{' '}
+                            {formatRoutePoint(load.deliveryCountry, load.deliveryPostcode, load.deliveryCity)}
+                          </td>
+                          <td className="px-3 py-2 text-right text-slate-700">
+                            {formatDistanceKm(load.distanceKm)}
                           </td>
                           <td className="px-3 py-2">
                             <span className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-semibold ${LOAD_STATUS_STYLES[load.status]}`}>

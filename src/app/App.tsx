@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Pencil,
   Trash2,
+  FileText,
 } from 'lucide-react';
 import type { PlannerLoad } from './types/load';
 import { CanvasVanCargo } from './components/CanvasVanCargo';
@@ -1931,6 +1932,36 @@ export default function App() {
                                       {load.pallets} pallets • {load.weight} kg
                                     </span>
                                   </button>
+
+                                  {(load.additionalDescription || load.sourceFreightPdfUrl) && (
+                                    <div className="mt-1.5 flex items-start justify-between gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                                      <p
+                                        className="min-w-0 flex-1 text-[10px] leading-4 text-gray-600"
+                                        title={load.additionalDescription || 'No additional description'}
+                                      >
+                                        {load.additionalDescription || 'No additional description'}
+                                      </p>
+                                      {load.sourceFreightPdfUrl && (
+                                        <button
+                                          type="button"
+                                          onMouseDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            window.open(
+                                              load.sourceFreightPdfUrl,
+                                              '_blank',
+                                              'noopener,noreferrer',
+                                            );
+                                          }}
+                                          className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+                                          title="Open source freight PDF"
+                                        >
+                                          <FileText className="h-3 w-3" />
+                                          PDF
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
 
                                   <div className="mt-2 grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-[11px] font-semibold text-gray-800 tabular-nums">
                                     <span className="text-left">{load.distance} km</span>

@@ -1,8 +1,9 @@
 import type { CreateLoadDto } from '../domain/dto';
-import { Currency, LoadStatus, StopType } from '../domain/enums';
+import { Currency, DocumentType, LoadStatus, StopType } from '../domain/enums';
 import type { Load, LoadStop } from '../domain/entities';
 import type { PlannerLoad } from './types/load';
 import { getSerbiaNowDateKey, toSerbiaDateKey } from '../utils/serbia-time';
+import { API_BASE } from '../api/client';
 
 const DEFAULT_COUNTRY = 'DE';
 const DEFAULT_COLOR = '#3B82F6';
@@ -42,6 +43,27 @@ const toDateOnly = (value?: string | null): string => {
     return serbiaDate;
   }
   return trimmed;
+};
+
+const FILES_PUBLIC_BASE = API_BASE.replace(/\/api\/?$/, '');
+
+const getAbsoluteFileBase = (): string => {
+  if (/^https?:\/\//i.test(FILES_PUBLIC_BASE)) {
+    return FILES_PUBLIC_BASE.replace(/\/+$/, '');
+  }
+  const normalizedBase = FILES_PUBLIC_BASE.startsWith('/')
+    ? FILES_PUBLIC_BASE
+    : `/${FILES_PUBLIC_BASE}`;
+  return `${window.location.origin}${normalizedBase}`.replace(/\/+$/, '');
+};
+
+const buildPublicFileUrl = (filePath: string): string => {
+  const trimmed = filePath.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const fileBase = getAbsoluteFileBase();
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${fileBase}${encodeURI(normalizedPath)}`;
 };
 
 const normalizeDateInput = (value: string | undefined, fallback: string): string => {
@@ -140,6 +162,25 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
     : '';
   const brokerContactPhone = apiLoad.brokerContact?.phone ?? apiLoad.brokerContact?.mobile ?? undefined;
   const brokerContactEmail = apiLoad.brokerContact?.email ?? undefined;
+  const latestFreightPdfDocument = [...(apiLoad.documents ?? [])]
+    .filter(
+      (document) =>
+        document.documentType === DocumentType.FREIGHT_ORDER &&
+        typeof document.filePath === 'string' &&
+        document.filePath.trim().length > 0,
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() -
+        new Date(a.createdAt).getTime(),
+    )[0];
+  const sourceFreightPdfUrl = latestFreightPdfDocument
+    ? buildPublicFileUrl(latestFreightPdfDocument.filePath)
+    : undefined;
+  const additionalDescription =
+    apiLoad.freightDetails?.goodsDescription?.trim() ||
+    apiLoad.notes?.trim() ||
+    undefined;
 
   const palletDimensions = (apiLoad.pallets ?? []).flatMap((pallet) => {
     const quantity = Math.max(1, pallet.quantity ?? 1);
@@ -210,6 +251,8 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
         : undefined,
     isInactive: apiLoad.isInactive ?? false,
     tripId: apiLoad.tripId ?? undefined,
+    additionalDescription,
+    sourceFreightPdfUrl,
     palletDimensions,
     extraStops: getExtraStopsFromApi(apiLoad),
   };

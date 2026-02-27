@@ -8,6 +8,7 @@ import {
 } from '../enums';
 import { BrokerCompany, BrokerContact } from './broker.entity';
 import type { Trip } from './trip.entity';
+import type { Document } from './document.entity';
 
 export interface Load extends BaseEntity {
   referenceNumber: string;
@@ -64,6 +65,7 @@ export interface Load extends BaseEntity {
   stops?: LoadStop[];
   freightDetails?: LoadFreightDetails;
   pallets?: LoadPallet[];
+  documents?: Document[];
 }
 
 export interface LoadStop extends BaseEntity {

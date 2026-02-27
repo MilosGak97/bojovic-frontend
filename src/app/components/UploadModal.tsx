@@ -130,7 +130,6 @@ export function UploadModal({
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
   const [isLoadingTrips, setIsLoadingTrips] = useState(false);
   const [tripsError, setTripsError] = useState<string | null>(null);
@@ -239,20 +238,6 @@ export function UploadModal({
       cancelled = true;
     };
   }, [isOpen, defaultTripId]);
-
-  useEffect(() => {
-    if (!pdfFile) {
-      setPdfPreviewUrl(null);
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(pdfFile);
-    setPdfPreviewUrl(objectUrl);
-
-    return () => {
-      URL.revokeObjectURL(objectUrl);
-    };
-  }, [pdfFile]);
 
   if (!isOpen) return null;
 
@@ -814,15 +799,6 @@ export function UploadModal({
                     className="hidden"
                     onChange={(event) => setPdfFile(event.target.files?.[0] ?? null)}
                   />
-                  {pdfPreviewUrl && (
-                    <button
-                      type="button"
-                      onClick={() => window.open(pdfPreviewUrl, '_blank', 'noopener,noreferrer')}
-                      className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
-                    >
-                      Quick View
-                    </button>
-                  )}
                 </div>
                 {pdfFile && (
                   <p className="mt-3 text-xs text-gray-600">
@@ -857,22 +833,6 @@ export function UploadModal({
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
-                <div className="border-b border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-600">
-                  PDF Preview
-                </div>
-                {pdfPreviewUrl ? (
-                  <iframe
-                    title="PDF quick preview"
-                    src={pdfPreviewUrl}
-                    className="h-[52vh] w-full bg-white"
-                  />
-                ) : (
-                  <div className="flex h-40 items-center justify-center px-4 text-xs text-gray-500">
-                    Select a PDF to preview it here.
-                  </div>
-                )}
-              </div>
             </div>
           )}
 
