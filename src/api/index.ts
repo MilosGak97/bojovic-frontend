@@ -10,6 +10,7 @@ import type {
   DispatchAssignment,
   PaymentRecord,
   Document,
+  DocumentUploadResult,
   Expense,
   DriverPayRecord,
   CustomIncome,
@@ -183,6 +184,11 @@ export const documentApi = {
   getOne: (id: string) => api.get<Document>(`/documents/${id}`),
   getByEntity: (category: string, entityId: string) =>
     api.get<Document[]>(`/documents?category=${category}&entityId=${entityId}`),
+  upload: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.postForm<DocumentUploadResult>('/documents/upload', formData);
+  },
   create: (data: unknown) => api.post<Document>('/documents', data),
   delete: (id: string) => api.delete(`/documents/${id}`),
 };

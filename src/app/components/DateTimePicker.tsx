@@ -3,6 +3,12 @@ import { Calendar as CalendarIcon, Clock3 } from 'lucide-react';
 import { Calendar } from './ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { cn } from './ui/utils';
+import {
+  addDaysToDateKey,
+  formatInSerbia,
+  getSerbiaNowDateKey,
+  getSerbiaNowDateTimeInput,
+} from '../../utils/serbia-time';
 
 type PickerMode = 'date' | 'datetime';
 
@@ -19,47 +25,83 @@ const TIME_STEP_MINUTES = 15;
 
 const pad = (value: number): string => String(value).padStart(2, '0');
 
+const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DATETIME_REGEX = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+
+type ParsedDateValue = {
+  year: number;
+  month: number;
+  day: number;
+};
+
+type ParsedDateTimeValue = ParsedDateValue & {
+  hour: number;
+  minute: number;
+};
+
+const parseDateValue = (value: string): ParsedDateValue | null => {
+  if (!value) return null;
+  const match = DATE_REGEX.exec(value.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return { year, month, day };
+};
+
+const parseDateTimeValue = (value: string): ParsedDateTimeValue | null => {
+  if (!value) return null;
+  const match = DATETIME_REGEX.exec(value.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute)
+  ) {
+    return null;
+  }
+  return { year, month, day, hour, minute };
+};
+
+const toCalendarDate = (parsed: ParsedDateValue): Date =>
+  new Date(parsed.year, parsed.month - 1, parsed.day, 12, 0, 0, 0);
+
 const toDateInputValue = (date: Date): string =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
-const toDateTimeInputValue = (date: Date): string =>
-  `${toDateInputValue(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+const toTimeInputValue = (hour: number, minute: number): string => `${pad(hour)}:${pad(minute)}`;
 
-const toTimeInputValue = (date: Date): string => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-
-const isValidDate = (date: Date): boolean => !Number.isNaN(date.getTime());
-
-const parseDateValue = (value: string): Date | null => {
-  if (!value) return null;
-  const parsed = new Date(`${value}T00:00:00`);
-  return isValidDate(parsed) ? parsed : null;
+const getTimeFromDateTimeInput = (value: string): string => {
+  const parsed = parseDateTimeValue(value);
+  if (!parsed) return '00:00';
+  return toTimeInputValue(parsed.hour, parsed.minute);
 };
 
-const parseDateTimeValue = (value: string): Date | null => {
-  if (!value) return null;
-  const parsed = new Date(value);
-  return isValidDate(parsed) ? parsed : null;
-};
+const getRoundedNowInput = (): string => {
+  const rawNow = getSerbiaNowDateTimeInput();
+  const parsed = parseDateTimeValue(rawNow);
+  if (!parsed) return rawNow;
 
-const getRoundedNow = (): Date => {
-  const now = new Date();
-  const roundedMinutes = Math.ceil(now.getMinutes() / TIME_STEP_MINUTES) * TIME_STEP_MINUTES;
-  now.setSeconds(0, 0);
-  if (roundedMinutes >= 60) {
-    now.setHours(now.getHours() + 1, 0, 0, 0);
-  } else {
-    now.setMinutes(roundedMinutes, 0, 0);
+  const totalMinutes = parsed.hour * 60 + parsed.minute;
+  let roundedMinutes = Math.ceil(totalMinutes / TIME_STEP_MINUTES) * TIME_STEP_MINUTES;
+  let dayKey = `${parsed.year}-${pad(parsed.month)}-${pad(parsed.day)}`;
+
+  if (roundedMinutes >= 24 * 60) {
+    roundedMinutes -= 24 * 60;
+    dayKey = addDaysToDateKey(dayKey, 1);
   }
-  return now;
-};
 
-const buildDateWithTime = (date: Date, time: string): Date => {
-  const [hourRaw, minuteRaw] = time.split(':');
-  const hours = Number(hourRaw);
-  const minutes = Number(minuteRaw);
-  const normalized = new Date(date);
-  normalized.setHours(Number.isFinite(hours) ? hours : 0, Number.isFinite(minutes) ? minutes : 0, 0, 0);
-  return normalized;
+  const hour = Math.floor(roundedMinutes / 60);
+  const minute = roundedMinutes % 60;
+  return `${dayKey}T${toTimeInputValue(hour, minute)}`;
 };
 
 const getDisplayLabel = (value: string, mode: PickerMode, placeholder: string): string => {
@@ -67,9 +109,9 @@ const getDisplayLabel = (value: string, mode: PickerMode, placeholder: string): 
   const parsed = mode === 'date' ? parseDateValue(value) : parseDateTimeValue(value);
   if (!parsed) return placeholder;
   if (mode === 'date') {
-    return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(parsed);
+    return formatInSerbia(value, { dateStyle: 'medium' }, placeholder);
   }
-  return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(parsed);
+  return formatInSerbia(value, { dateStyle: 'medium', timeStyle: 'short' }, placeholder);
 };
 
 const TIME_OPTIONS = Array.from({ length: (24 * 60) / TIME_STEP_MINUTES }, (_, index) => {
@@ -89,21 +131,27 @@ export function DateTimePicker({
   triggerClassName,
 }: DateTimePickerProps) {
   const [open, setOpen] = useState(false);
-  const parsedValue = useMemo(
-    () => (mode === 'date' ? parseDateValue(value) : parseDateTimeValue(value)),
-    [mode, value],
+  const parsedDateValue = useMemo(() => parseDateValue(value), [value]);
+  const parsedDateTimeValue = useMemo(() => parseDateTimeValue(value), [value]);
+  const parsedValue = mode === 'date' ? parsedDateValue : parsedDateTimeValue;
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(
+    parsedValue ? toCalendarDate(parsedValue) : undefined,
   );
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(parsedValue ?? undefined);
   const [selectedTime, setSelectedTime] = useState<string>(
-    toTimeInputValue(parsedValue ?? getRoundedNow()),
+    mode === 'datetime'
+      ? getTimeFromDateTimeInput(value || getRoundedNowInput())
+      : '00:00',
   );
 
   useEffect(() => {
-    setSelectedDate(parsedValue ?? undefined);
+    setSelectedDate(parsedValue ? toCalendarDate(parsedValue) : undefined);
     if (mode === 'datetime') {
-      setSelectedTime(toTimeInputValue(parsedValue ?? getRoundedNow()));
+      const nextTime = parsedDateTimeValue
+        ? toTimeInputValue(parsedDateTimeValue.hour, parsedDateTimeValue.minute)
+        : getTimeFromDateTimeInput(getRoundedNowInput());
+      setSelectedTime(nextTime);
     }
-  }, [mode, parsedValue]);
+  }, [mode, parsedDateTimeValue, parsedValue]);
 
   const resolvedPlaceholder = placeholder ?? (mode === 'date' ? 'Select date' : 'Select date & time');
   const displayLabel = getDisplayLabel(value, mode, resolvedPlaceholder);
@@ -119,27 +167,32 @@ export function DateTimePicker({
       return;
     }
     const nextTime = timeOverride ?? selectedTime;
-    const withTime = buildDateWithTime(date, nextTime);
-    onChange(toDateTimeInputValue(withTime));
+    onChange(`${toDateInputValue(date)}T${nextTime}`);
   };
 
   const handleQuickToday = () => {
-    const today = new Date();
+    const todayKey = getSerbiaNowDateKey();
+    const parsedToday = parseDateValue(todayKey);
+    if (!parsedToday) return;
+    const today = toCalendarDate(parsedToday);
     if (mode === 'date') {
       applyDate(today);
       return;
     }
-    const time = selectedDate ? selectedTime : toTimeInputValue(getRoundedNow());
+    const time = selectedDate ? selectedTime : getTimeFromDateTimeInput(getRoundedNowInput());
     setSelectedTime(time);
     applyDate(today, time);
   };
 
   const handleQuickNow = () => {
     if (mode !== 'datetime') return;
-    const now = getRoundedNow();
-    const nextTime = toTimeInputValue(now);
+    const roundedNow = getRoundedNowInput();
+    const parsedNow = parseDateTimeValue(roundedNow);
+    if (!parsedNow) return;
+    const nowDate = toCalendarDate(parsedNow);
+    const nextTime = toTimeInputValue(parsedNow.hour, parsedNow.minute);
     setSelectedTime(nextTime);
-    applyDate(now, nextTime);
+    applyDate(nowDate, nextTime);
   };
 
   return (

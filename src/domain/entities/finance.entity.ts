@@ -1,5 +1,12 @@
 import { BaseEntity } from './base.entity';
-import { Currency, DriverPayStatus, ExpenseCategory, ExpenseRecurrence, ExpenseType } from '../enums';
+import {
+  Currency,
+  DriverPayStatus,
+  ExpenseCategory,
+  ExpenseRecurrence,
+  ExpenseStatus,
+  ExpenseType,
+} from '../enums';
 import { Van } from './van.entity';
 import { Driver } from './driver.entity';
 import { Load } from './load.entity';
@@ -7,7 +14,10 @@ import { Load } from './load.entity';
 export interface Expense extends BaseEntity {
   category: ExpenseCategory;
   expenseType: ExpenseType;
+  status: ExpenseStatus;
   amount: number;
+  inputAmount: number | null;
+  inputCurrency: 'EUR' | 'RSD' | null;
   currency: Currency;
   vatRate: number | null;
   vatAmount: number | null;

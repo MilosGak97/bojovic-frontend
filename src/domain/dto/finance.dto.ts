@@ -1,9 +1,19 @@
-import { Currency, DriverPayStatus, ExpenseCategory, ExpenseRecurrence, ExpenseType } from '../enums';
+import {
+  Currency,
+  DriverPayStatus,
+  ExpenseCategory,
+  ExpenseRecurrence,
+  ExpenseStatus,
+  ExpenseType,
+} from '../enums';
 
 export interface CreateExpenseDto {
   category: ExpenseCategory;
   expenseType?: ExpenseType;
+  status?: ExpenseStatus;
   amount: number;
+  inputAmount?: number;
+  inputCurrency?: 'EUR' | 'RSD';
   currency?: Currency;
   vatRate?: number;
   vatAmount?: number;

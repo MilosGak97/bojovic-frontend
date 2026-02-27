@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Truck, ChevronDown } from 'lucide-react';
 import { tripApi } from '../../api';
 import type { Trip } from '../../domain/entities';
+import { formatInSerbia } from '../../utils/serbia-time';
 
 interface TripSelectorProps {
   selectedTripId: string;
@@ -10,9 +11,7 @@ interface TripSelectorProps {
 
 const formatDateRange = (from: string, to: string | null): string => {
   const formatShort = (value: string): string => {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value;
-    return parsed.toLocaleDateString('en-GB', { month: 'short', day: 'numeric' });
+    return formatInSerbia(value, { month: 'short', day: 'numeric' }, value);
   };
 
   const start = formatShort(from);

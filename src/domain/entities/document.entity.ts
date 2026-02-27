@@ -20,3 +20,11 @@ export interface Document extends BaseEntity {
   driverId: string | null;
   vanId: string | null;
 }
+
+export interface DocumentUploadResult {
+  fileName: string;
+  filePath: string;
+  mimeType: string;
+  fileSizeBytes: number | null;
+  url: string;
+}

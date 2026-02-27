@@ -12,6 +12,12 @@ import type {
 } from '../domain/dto';
 import type { Driver, Trip, Van } from '../domain/entities';
 import { DriverStatus, TripStatus, VanStatus } from '../domain/enums';
+import {
+  formatSerbiaDate,
+  formatSerbiaDateTime,
+  serbiaDateTimeInputToIso,
+  toSerbiaDateTimeInput,
+} from '../utils/serbia-time';
 
 const DRIVER_STATUS_STYLES: Record<DriverStatus, string> = {
   [DriverStatus.AVAILABLE]: 'bg-emerald-100 text-emerald-700 border-emerald-200',
@@ -23,32 +29,10 @@ const DRIVER_STATUS_STYLES: Record<DriverStatus, string> = {
 
 const DRIVER_STATUS_OPTIONS = Object.values(DriverStatus);
 
-const toDatetimeLocalValue = (date?: string | null): string => {
-  const value = date ? new Date(date) : new Date();
-  if (Number.isNaN(value.getTime())) return '';
-  const offset = value.getTimezoneOffset();
-  const localDate = new Date(value.getTime() - offset * 60_000);
-  return localDate.toISOString().slice(0, 16);
-};
-
-const toIso = (localDatetime: string): string => new Date(localDatetime).toISOString();
-
-const formatDate = (value?: string | null): string => {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('en-GB').format(date);
-};
-
-const formatDateTime = (value?: string | null): string => {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('en-GB', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date);
-};
+const toDatetimeLocalValue = (date?: string | null): string => toSerbiaDateTimeInput(date);
+const toIso = (localDatetime: string): string => serbiaDateTimeInputToIso(localDatetime) ?? '';
+const formatDate = (value?: string | null): string => formatSerbiaDate(value, '—');
+const formatDateTime = (value?: string | null): string => formatSerbiaDateTime(value, '—');
 
 type DriverFormState = {
   firstName: string;

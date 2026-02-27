@@ -158,6 +158,7 @@ export enum ExpenseCategory {
   PARKING = 'PARKING',
   INSURANCE = 'INSURANCE',
   LEASING = 'LEASING',
+  BANK_LOAN = 'BANK_LOAN',
   PERMITS = 'PERMITS',
   OFFICE = 'OFFICE',
   SOFTWARE = 'SOFTWARE',
@@ -176,6 +177,11 @@ export enum ExpenseRecurrence {
   ONE_TIME = 'ONE_TIME',
   MONTHLY = 'MONTHLY',
   WEEKLY = 'WEEKLY',
+}
+
+export enum ExpenseStatus {
+  PENDING = 'PENDING',
+  POSTED = 'POSTED',
 }
 
 export enum DriverPayStatus {

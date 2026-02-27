@@ -6,7 +6,7 @@ export type { Driver } from './driver.entity';
 export type { Trip } from './trip.entity';
 export type { RoutePlan, RouteStop, RouteSimulation, CargoPlacement } from './route.entity';
 export type { DispatchAssignment } from './dispatch.entity';
-export type { Document } from './document.entity';
+export type { Document, DocumentUploadResult } from './document.entity';
 export type {
   PaymentRecord,
   PaymentWorkflow,

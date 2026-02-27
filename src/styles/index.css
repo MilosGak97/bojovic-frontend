@@ -1,3 +1,9 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.css';
+
+@media (min-width: 768px) {
+  body.app-shell-sidebar-layout #root {
+    padding-left: 16rem;
+  }
+}

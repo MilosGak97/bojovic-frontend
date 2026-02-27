@@ -10,6 +10,11 @@ import {
 } from '../../domain/enums';
 import type { Load, Trip } from '../../domain/entities';
 import { DateTimePicker } from './DateTimePicker';
+import {
+  addDaysToDateKey,
+  getSerbiaNowDateTimeInput,
+  serbiaDateTimeInputToIso,
+} from '../../utils/serbia-time';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -46,17 +51,17 @@ type UploadModalTab = 'manual' | 'pdf';
 
 const createRowId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const formatDateTimeLocal = (date: Date): string => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+const getDefaultPickupDate = (): string => getSerbiaNowDateTimeInput();
+
+const getDefaultDeliveryDate = (): string => {
+  const pickup = getDefaultPickupDate();
+  const [pickupDay, pickupTime] = pickup.split('T');
+  if (!pickupDay || !pickupTime) return pickup;
+  return `${addDaysToDateKey(pickupDay, 1)}T${pickupTime}`;
 };
 
-const defaultPickupDate = formatDateTimeLocal(new Date());
-const defaultDeliveryDate = formatDateTimeLocal(new Date(Date.now() + 24 * 60 * 60 * 1000));
+const defaultPickupDate = getDefaultPickupDate();
+const defaultDeliveryDate = getDefaultDeliveryDate();
 
 const defaultPalletRow = (): PalletDraft => ({
   id: createRowId(),
@@ -90,9 +95,7 @@ const toOptionalNumber = (value: string): number | undefined => {
 
 const toIsoDateTime = (value: string): string | null => {
   if (!value.trim()) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString();
+  return serbiaDateTimeInputToIso(value);
 };
 
 const toOptionalInteger = (value: string): number | undefined => {
@@ -270,14 +273,14 @@ export function UploadModal({
       pickupCity: '',
       pickupPostcode: '',
       pickupCountry: 'DE',
-      pickupDateFrom: formatDateTimeLocal(new Date()),
+      pickupDateFrom: getDefaultPickupDate(),
       pickupDateTo: '',
       pickupStopPallets: '',
       deliveryAddress: '',
       deliveryCity: '',
       deliveryPostcode: '',
       deliveryCountry: 'DE',
-      deliveryDateFrom: formatDateTimeLocal(new Date(Date.now() + 24 * 60 * 60 * 1000)),
+      deliveryDateFrom: getDefaultDeliveryDate(),
       deliveryDateTo: '',
       deliveryStopPallets: '',
       publishedPrice: '',
@@ -528,30 +531,7 @@ export function UploadModal({
       let brokerIdToUse: string | undefined;
       let brokerContactIdToUse: string | undefined;
 
-      const hasBrokerMetrics =
-        form.brokerPaidOnTime.trim() ||
-        form.brokerPaidWithDelay.trim() ||
-        form.brokerPaymentIssues.trim() ||
-        form.brokerRating.trim() ||
-        form.brokerReviewCount.trim();
       const hasContactDetails = contactPerson || contactPhone || contactEmail;
-      const hasBrokerDetails =
-        brokerName ||
-        brokerTransEuId ||
-        form.brokerCompanyAddress.trim() ||
-        form.brokerEmployeeCount.trim() ||
-        hasBrokerMetrics;
-
-      if (hasBrokerDetails && !brokerName) {
-        setFormError('Brokerage Name is required when entering broker details.');
-        setIsSubmitting(false);
-        return;
-      }
-      if (hasContactDetails && !brokerName) {
-        setFormError('Brokerage Name is required when entering broker contact details.');
-        setIsSubmitting(false);
-        return;
-      }
       if ((contactPhone || contactEmail) && !contactPerson) {
         setFormError('Contact Person is required when entering contact phone or email.');
         setIsSubmitting(false);

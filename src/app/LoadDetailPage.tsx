@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RefreshCw } from 'lucide-react';
 import { brokerApi, brokerContactApi, documentApi, loadApi, paymentApi } from '../api';
+import { API_BASE } from '../api/client';
 import type {
   BrokerCompany,
   BrokerContact,
@@ -22,6 +23,13 @@ import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { DateTimePicker } from './components/DateTimePicker';
 import { ComposeEmailModal } from './components/ComposeEmailModal';
 import { EmailLogPanel } from './components/EmailLogPanel';
+import {
+  addDaysToDateKey,
+  formatSerbiaDate,
+  getDaysUntilDateKey,
+  getSerbiaNowDateKey,
+  toSerbiaDateKey,
+} from '../utils/serbia-time';
 
 type LoadDetailSection =
   | 'overview'
@@ -207,19 +215,16 @@ const formatMoney = (value: number): string => moneyFormatter.format(toNumber(va
 
 const toDateOnly = (value?: string | null): string => {
   if (!value) return '';
-  const direct = value.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (direct) return direct[1];
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toISOString().slice(0, 10);
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  return toSerbiaDateKey(trimmed);
 };
 
 const formatDate = (value?: string | null): string => {
   const dateOnly = toDateOnly(value);
   if (!dateOnly) return '—';
-  const parsed = new Date(`${dateOnly}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return dateOnly;
-  return parsed.toLocaleDateString('en-GB');
+  return formatSerbiaDate(dateOnly, dateOnly);
 };
 
 const formatBrokerRating = (value?: string | null): string => {
@@ -255,7 +260,7 @@ const toOptionalDecimalString = (value: string, label: string): number | null =>
   return Math.round(parsed * 100) / 100;
 };
 
-const getTodayDateInput = (): string => new Date().toISOString().slice(0, 10);
+const getTodayDateInput = (): string => getSerbiaNowDateKey();
 
 const normalizeNullableDate = (value?: string | null): string | null => {
   const normalized = toDateOnly(value);
@@ -265,20 +270,13 @@ const normalizeNullableDate = (value?: string | null): string | null => {
 const addDaysToDateInput = (value: string, days: number): string => {
   const normalized = toDateOnly(value);
   if (!normalized) return '';
-  const parsed = new Date(`${normalized}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return '';
-  parsed.setUTCDate(parsed.getUTCDate() + days);
-  return parsed.toISOString().slice(0, 10);
+  return addDaysToDateKey(normalized, days);
 };
 
 const getDaysUntilDateInput = (value?: string | null): number | null => {
   const normalized = toDateOnly(value);
   if (!normalized) return null;
-  const target = new Date(`${normalized}T00:00:00Z`);
-  if (Number.isNaN(target.getTime())) return null;
-  const today = new Date(`${getTodayDateInput()}T00:00:00Z`);
-  const diffMs = target.getTime() - today.getTime();
-  return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+  return getDaysUntilDateKey(normalized, getTodayDateInput());
 };
 
 const mergeWorkflowData = (
@@ -482,6 +480,27 @@ const getActivityKindClass = (kind: ActivityKind): string => {
   }
 };
 
+const FILES_PUBLIC_BASE = API_BASE.replace(/\/api\/?$/, '');
+
+const getAbsoluteFileBase = (): string => {
+  if (/^https?:\/\//i.test(FILES_PUBLIC_BASE)) {
+    return FILES_PUBLIC_BASE.replace(/\/+$/, '');
+  }
+  const normalizedBase = FILES_PUBLIC_BASE.startsWith('/')
+    ? FILES_PUBLIC_BASE
+    : `/${FILES_PUBLIC_BASE}`;
+  return `${window.location.origin}${normalizedBase}`.replace(/\/+$/, '');
+};
+
+const buildPublicFileUrl = (filePath: string): string => {
+  const trimmed = filePath.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const fileBase = getAbsoluteFileBase();
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${fileBase}${encodeURI(normalizedPath)}`;
+};
+
 export default function LoadDetailPage() {
   const { loadId = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -567,6 +586,7 @@ export default function LoadDetailPage() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingPaymentDetails, setIsSavingPaymentDetails] = useState(false);
+  const [copiedDocumentId, setCopiedDocumentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -690,6 +710,33 @@ export default function LoadDetailPage() {
     [documents],
   );
 
+  const handleViewDocument = (document: Document) => {
+    const fileUrl = buildPublicFileUrl(document.filePath);
+    if (!fileUrl) {
+      setError('Document file path is missing.');
+      return;
+    }
+    window.open(fileUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleCopyDocumentLink = async (document: Document) => {
+    const fileUrl = buildPublicFileUrl(document.filePath);
+    if (!fileUrl) {
+      setError('Document file path is missing.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(fileUrl);
+      setCopiedDocumentId(document.id);
+      window.setTimeout(() => {
+        setCopiedDocumentId((current) => (current === document.id ? null : current));
+      }, 1400);
+    } catch {
+      setError('Failed to copy document link.');
+    }
+  };
+
   const orderedStops = useMemo(
     () => [...(load?.stops ?? [])].sort((a, b) => a.orderIndex - b.orderIndex),
     [load?.stops],
@@ -723,7 +770,7 @@ export default function LoadDetailPage() {
   }, [load, primaryPayment]);
 
   const activityEvents = useMemo<ActivityEvent[]>(() => {
-    const today = toDateOnly(new Date().toISOString());
+    const today = getTodayDateInput();
     const events: ActivityEvent[] = [];
 
     if (load) {
@@ -3097,7 +3144,29 @@ export default function LoadDetailPage() {
                           <td className="px-2 py-1.5 text-slate-900">{document.title}</td>
                           <td className="px-2 py-1.5 text-slate-700">{formatDate(document.issuedAt)}</td>
                           <td className="px-2 py-1.5 text-slate-700">{formatDate(document.validUntil)}</td>
-                          <td className="px-2 py-1.5 text-slate-700">{document.fileName}</td>
+                          <td className="px-2 py-1.5 text-slate-700">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="max-w-[220px] truncate" title={document.fileName}>
+                                {document.fileName}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleViewDocument(document)}
+                                disabled={!document.filePath}
+                                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                              >
+                                View
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyDocumentLink(document)}
+                                disabled={!document.filePath}
+                                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                              >
+                                {copiedDocumentId === document.id ? 'Copied' : 'Copy Link'}
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

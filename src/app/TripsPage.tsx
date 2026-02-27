@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { Ban, CheckCircle2, Plus, Play, X } from 'lucide-react';
 import { driverApi, tripApi, vanApi } from '../api';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
@@ -11,6 +12,11 @@ import type {
 } from '../domain/dto';
 import type { Driver, Trip, Van } from '../domain/entities';
 import { DriverStatus, TripStatus, VanStatus } from '../domain/enums';
+import {
+  formatSerbiaDateTime,
+  serbiaDateTimeInputToIso,
+  toSerbiaDateTimeInput,
+} from '../utils/serbia-time';
 
 type TripTab = 'ACTIVE' | 'PAST' | 'ALL';
 
@@ -21,25 +27,9 @@ const TRIP_STATUS_STYLES: Record<TripStatus, string> = {
   [TripStatus.CANCELED]: 'border-rose-200 bg-rose-50 text-rose-700',
 };
 
-const toDatetimeLocalValue = (date?: string | null): string => {
-  const value = date ? new Date(date) : new Date();
-  if (Number.isNaN(value.getTime())) return '';
-  const offset = value.getTimezoneOffset();
-  const localDate = new Date(value.getTime() - offset * 60_000);
-  return localDate.toISOString().slice(0, 16);
-};
-
-const toIso = (localDatetime: string): string => new Date(localDatetime).toISOString();
-
-const formatDateTime = (value?: string | null): string => {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('en-GB', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date);
-};
+const toDatetimeLocalValue = (date?: string | null): string => toSerbiaDateTimeInput(date);
+const toIso = (localDatetime: string): string => serbiaDateTimeInputToIso(localDatetime) ?? '';
+const formatDateTime = (value?: string | null): string => formatSerbiaDateTime(value, '—');
 
 const getTripKm = (trip: Trip): string => {
   if (trip.startOdometerKm === null || trip.endOdometerKm === null) return '—';
@@ -429,55 +419,59 @@ export default function TripsPage() {
                       <td className="px-3 py-2 text-right text-slate-700">{trip.loads?.length ?? 0}</td>
                       <td className="px-3 py-2 text-right text-slate-700">{getTripKm(trip)}</td>
                       <td className="px-3 py-2 text-right">
-                        {trip.status === TripStatus.PLANNED && (
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => openStartTripModal(trip)}
-                              disabled={isSubmitting}
-                              className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <Play className="h-3.5 w-3.5" />
-                              Start
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleCancelTrip(trip.id)}
-                              disabled={isSubmitting}
-                              className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <Ban className="h-3.5 w-3.5" />
-                              Cancel
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex items-center justify-end gap-1">
+                          <Link
+                            to={`/trips/${trip.id}`}
+                            className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            View
+                          </Link>
+                          {trip.status === TripStatus.PLANNED && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openStartTripModal(trip)}
+                                disabled={isSubmitting}
+                                className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Play className="h-3.5 w-3.5" />
+                                Start
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleCancelTrip(trip.id)}
+                                disabled={isSubmitting}
+                                className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Ban className="h-3.5 w-3.5" />
+                                Cancel
+                              </button>
+                            </>
+                          )}
 
-                        {trip.status === TripStatus.IN_PROGRESS && (
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => openCompleteModal(trip)}
-                              disabled={isSubmitting}
-                              className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Complete
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleCancelTrip(trip.id)}
-                              disabled={isSubmitting}
-                              className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <Ban className="h-3.5 w-3.5" />
-                              Cancel
-                            </button>
-                          </div>
-                        )}
-
-                        {[TripStatus.COMPLETED, TripStatus.CANCELED].includes(trip.status) && (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
+                          {trip.status === TripStatus.IN_PROGRESS && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openCompleteModal(trip)}
+                                disabled={isSubmitting}
+                                className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                Complete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleCancelTrip(trip.id)}
+                                disabled={isSubmitting}
+                                className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Ban className="h-3.5 w-3.5" />
+                                Cancel
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

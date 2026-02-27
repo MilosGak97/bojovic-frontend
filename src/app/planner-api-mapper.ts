@@ -2,6 +2,7 @@ import type { CreateLoadDto } from '../domain/dto';
 import { Currency, LoadStatus, StopType } from '../domain/enums';
 import type { Load, LoadStop } from '../domain/entities';
 import type { PlannerLoad } from './types/load';
+import { getSerbiaNowDateKey, toSerbiaDateKey } from '../utils/serbia-time';
 
 const DEFAULT_COUNTRY = 'DE';
 const DEFAULT_COLOR = '#3B82F6';
@@ -35,11 +36,10 @@ const toDateOnly = (value?: string | null): string => {
   if (!value) return '';
   const trimmed = value.trim();
   if (!trimmed) return '';
-  const directDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (directDate) return directDate[1];
-  const parsed = new Date(trimmed);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const serbiaDate = toSerbiaDateKey(trimmed);
+  if (serbiaDate) {
+    return serbiaDate;
   }
   return trimmed;
 };
@@ -49,7 +49,7 @@ const normalizeDateInput = (value: string | undefined, fallback: string): string
   if (trimmed) return trimmed;
   const fallbackTrimmed = fallback.trim();
   if (fallbackTrimmed) return fallbackTrimmed;
-  return new Date().toISOString().slice(0, 10);
+  return getSerbiaNowDateKey();
 };
 
 const parseAddressFields = (

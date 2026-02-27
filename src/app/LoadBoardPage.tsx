@@ -6,6 +6,7 @@ import type { Load, Trip } from '../domain/entities';
 import { LoadStatus } from '../domain/enums';
 import { ThinModuleMenu } from './components/ThinModuleMenu';
 import { UploadModal } from './components/UploadModal';
+import { formatInSerbia, formatSerbiaDateTime } from '../utils/serbia-time';
 
 type LoadStatusFilter = 'ALL' | LoadStatus;
 
@@ -37,17 +38,10 @@ const getStatusBadgeClass = (status: LoadStatus): string => {
   }
 };
 
-const formatDateTime = (value: string): string => {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString('en-GB', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
+const formatDateTime = (value: string): string => formatSerbiaDateTime(value, value);
+
+const formatTripDay = (value?: string | null): string =>
+  formatInSerbia(value, { month: 'short', day: 'numeric' }, '—');
 
 const formatLocation = (country: string, postcode: string, city: string): string =>
   [country, postcode, city].filter(Boolean).join(', ');
@@ -665,8 +659,8 @@ export default function LoadBoardPage() {
                       <p className="text-sm font-semibold text-slate-900">{driverName}</p>
                       <p className="text-xs text-slate-600">{vanName} {vanPlate && `(${vanPlate})`}</p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        {new Date(trip.loadboardFromDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}
-                        {trip.plannedEndDate && ` – ${new Date(trip.plannedEndDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}`}
+                        {formatTripDay(trip.loadboardFromDate)}
+                        {trip.plannedEndDate && ` – ${formatTripDay(trip.plannedEndDate)}`}
                       </p>
                     </button>
                   );
@@ -768,8 +762,8 @@ export default function LoadBoardPage() {
                       <p className="text-sm font-semibold text-slate-900">{driverName}</p>
                       <p className="text-xs text-slate-600">{vanName} {vanPlate && `(${vanPlate})`}</p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        {new Date(trip.loadboardFromDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}
-                        {trip.plannedEndDate && ` – ${new Date(trip.plannedEndDate).toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })}`}
+                        {formatTripDay(trip.loadboardFromDate)}
+                        {trip.plannedEndDate && ` – ${formatTripDay(trip.plannedEndDate)}`}
                       </p>
                     </button>
                   );

@@ -798,19 +798,37 @@ export default function App() {
     const currentLoad = loads.find((load) => load.id === id);
     if (!currentLoad || currentLoad.status === status) return;
 
+    if (status === 'TAKEN' && !selectedTrip) {
+      setLastPlannerSyncError('Select an active trip before moving a load to TAKEN.');
+      return;
+    }
+
+    const nextTripId =
+      status === 'TAKEN' ? selectedTrip || currentLoad.tripId : currentLoad.tripId;
+    const nextLoad: PlannerLoad = {
+      ...currentLoad,
+      status,
+      ...(nextTripId ? { tripId: nextTripId } : {}),
+    };
+
     setLoads((prev) =>
-      prev.map((load) => (load.id === id ? { ...load, status } : load)),
+      prev.map((load) => (load.id === id ? nextLoad : load)),
     );
 
     const isPlannedStatus = (loadStatus: PlannerLoad['status']) =>
       loadStatus === 'TAKEN' || loadStatus === 'NEGOTIATING';
     const wasPlanned = isPlannedStatus(currentLoad.status);
     const isPlanned = isPlannedStatus(status);
+    const gainedTripAssignment = !currentLoad.tripId && !!nextTripId;
 
-    if (isPlanned && !wasPlanned && currentLoad.tripId) {
-      handleLoadToVan({ ...currentLoad, status });
+    if (
+      isPlanned &&
+      nextLoad.tripId &&
+      (!wasPlanned || gainedTripAssignment)
+    ) {
+      handleLoadToVan(nextLoad);
     } else if (!isPlanned && wasPlanned) {
-      handleRemoveFromVan({ ...currentLoad, status });
+      handleRemoveFromVan(nextLoad);
     }
   };
 
@@ -930,10 +948,18 @@ export default function App() {
     if (!load) return;
 
     const targetStatus = preferredStatus ?? normalizeOrganizerStatus(load.status);
+    if (targetStatus === 'TAKEN' && !selectedTrip && !load.tripId) {
+      setLastPlannerSyncError('Select an active trip before moving a load to TAKEN.');
+      return;
+    }
+
+    const nextTripId =
+      targetStatus === 'TAKEN' ? selectedTrip || load.tripId : load.tripId;
     const reactivatedLoad: PlannerLoad = {
       ...load,
       isInactive: false,
       status: targetStatus,
+      ...(nextTripId ? { tripId: nextTripId } : {}),
     };
 
     setLoads((prev) =>
@@ -988,9 +1014,20 @@ export default function App() {
       return;
     }
 
+    if (updatedLoad.status === 'TAKEN' && !selectedTrip && !updatedLoad.tripId) {
+      setLastPlannerSyncError('Select an active trip before moving a load to TAKEN.');
+      return;
+    }
+
+    const nextTripId =
+      updatedLoad.status === 'TAKEN'
+        ? selectedTrip || updatedLoad.tripId || currentLoad.tripId
+        : updatedLoad.tripId || currentLoad.tripId;
+
     const normalizedUpdatedLoad: PlannerLoad = {
       ...updatedLoad,
       isInactive: false,
+      ...(nextTripId ? { tripId: nextTripId } : {}),
     };
 
     setLoads((prev) =>
@@ -1006,8 +1043,13 @@ export default function App() {
       status === 'TAKEN' || status === 'NEGOTIATING';
     const wasPlanned = isPlannedStatus(currentLoad.status);
     const isPlanned = isPlannedStatus(normalizedUpdatedLoad.status);
+    const gainedTripAssignment = !currentLoad.tripId && !!normalizedUpdatedLoad.tripId;
 
-    if (isPlanned && !wasPlanned && normalizedUpdatedLoad.tripId) {
+    if (
+      isPlanned &&
+      normalizedUpdatedLoad.tripId &&
+      (!wasPlanned || gainedTripAssignment)
+    ) {
       handleLoadToVan(normalizedUpdatedLoad);
     } else if (!isPlanned && wasPlanned) {
       handleRemoveFromVan(normalizedUpdatedLoad);

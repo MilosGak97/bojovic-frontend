@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Mail, RefreshCw } from 'lucide-react';
 import { emailApi } from '../../api';
 import type { EmailLog } from '../../domain/entities';
+import { formatInSerbia } from '../../utils/serbia-time';
 
 type EmailLogPanelProps = {
   relatedEntityType: string;
@@ -29,14 +30,13 @@ export function EmailLogPanel({ relatedEntityType, relatedEntityId }: EmailLogPa
   }, [fetchLogs]);
 
   const formatDate = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-GB', {
+    return formatInSerbia(iso, {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-    });
+    }, iso);
   };
 
   return (

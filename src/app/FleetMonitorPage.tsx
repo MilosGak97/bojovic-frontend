@@ -6,6 +6,10 @@ import { CreateTripModal } from './components/CreateTripModal';
 import type { CreateTripDto, CreateVanDto } from '../domain/dto';
 import type { Driver, Trip, Van } from '../domain/entities';
 import { DriverStatus, TripStatus, VanStatus, VanType } from '../domain/enums';
+import {
+  serbiaDateTimeInputToIso,
+  toSerbiaDateTimeInput,
+} from '../utils/serbia-time';
 
 const VEHICLE_TYPE_OPTIONS: Array<{
   value: VanType;
@@ -56,15 +60,8 @@ const toPositiveInteger = (value: string): number | null => {
   return Math.round(parsed);
 };
 
-const toDatetimeLocalValue = (date?: string | null): string => {
-  const value = date ? new Date(date) : new Date();
-  if (Number.isNaN(value.getTime())) return '';
-  const offset = value.getTimezoneOffset();
-  const localDate = new Date(value.getTime() - offset * 60_000);
-  return localDate.toISOString().slice(0, 16);
-};
-
-const toIso = (localDatetime: string): string => new Date(localDatetime).toISOString();
+const toDatetimeLocalValue = (date?: string | null): string => toSerbiaDateTimeInput(date);
+const toIso = (localDatetime: string): string => serbiaDateTimeInputToIso(localDatetime) ?? '';
 
 export default function FleetMonitorPage() {
   const [vans, setVans] = useState<Van[]>([]);
