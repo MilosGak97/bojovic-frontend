@@ -408,6 +408,7 @@ export default function App() {
   const [draggingLoadId, setDraggingLoadId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<OrganizerStatus | null>(null);
   const [isInactiveModalOpen, setIsInactiveModalOpen] = useState(false);
+  const [isDeletingInactive, setIsDeletingInactive] = useState(false);
   const [editingLoadId, setEditingLoadId] = useState<string | null>(null);
   const [editingPalletLoadId, setEditingPalletLoadId] = useState<string | null>(null);
   const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
@@ -973,6 +974,91 @@ export default function App() {
       handleLoadToVan(reactivatedLoad);
     } else {
       handleRemoveFromVan(reactivatedLoad);
+    }
+  };
+
+  const removeLoadFromPlannerState = (loadId: string) => {
+    setLoads((prev) => prev.filter((load) => load.id !== loadId));
+    setStops((prev) => prev.filter((stop) => stop.loadId !== loadId));
+    setLoadedCargoIds((prev) => prev.filter((id) => id !== loadId));
+    setSelectedLoadId((current) => (current === loadId ? null : current));
+    setEditingLoadId((current) => (current === loadId ? null : current));
+    setEditingPalletLoadId((current) => (current === loadId ? null : current));
+    setSelectedStops([]);
+  };
+
+  const handleHardDeleteInactiveLoad = async (loadId: string) => {
+    const load = loads.find((currentLoad) => currentLoad.id === loadId);
+    if (!load || !load.isInactive || isDeletingInactive) return;
+
+    const confirmed = window.confirm(
+      'Delete this inactive load permanently? This removes the load, stops, pallets, documents, and payments. Brokers stay untouched.',
+    );
+    if (!confirmed) return;
+
+    setIsDeletingInactive(true);
+    try {
+      await loadApi.delete(loadId);
+      removeLoadFromPlannerState(loadId);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to delete inactive load.';
+      setLastPlannerSyncError(message);
+      window.alert(message);
+    } finally {
+      setIsDeletingInactive(false);
+    }
+  };
+
+  const handleHardDeleteAllInactive = async () => {
+    if (isDeletingInactive || inactiveLoads.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Delete all inactive loads (${inactiveLoads.length}) permanently? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setIsDeletingInactive(true);
+    try {
+      const inactiveIds = inactiveLoads.map((load) => load.id);
+      const results = await Promise.allSettled(
+        inactiveIds.map((loadId) => loadApi.delete(loadId)),
+      );
+      const deletedIds: string[] = [];
+      let failedCount = 0;
+
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          deletedIds.push(inactiveIds[index]);
+          return;
+        }
+        failedCount += 1;
+      });
+
+      if (deletedIds.length > 0) {
+        setLoads((prev) => prev.filter((load) => !deletedIds.includes(load.id)));
+        setStops((prev) => prev.filter((stop) => !deletedIds.includes(stop.loadId)));
+        setLoadedCargoIds((prev) => prev.filter((id) => !deletedIds.includes(id)));
+        setSelectedLoadId((current) => (current && deletedIds.includes(current) ? null : current));
+        setEditingLoadId((current) => (current && deletedIds.includes(current) ? null : current));
+        setEditingPalletLoadId((current) =>
+          current && deletedIds.includes(current) ? null : current,
+        );
+        setSelectedStops([]);
+      }
+
+      if (failedCount > 0) {
+        const message = `${failedCount} inactive load(s) failed to delete.`;
+        setLastPlannerSyncError(message);
+        window.alert(message);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to delete inactive loads.';
+      setLastPlannerSyncError(message);
+      window.alert(message);
+    } finally {
+      setIsDeletingInactive(false);
     }
   };
 
@@ -2169,15 +2255,24 @@ export default function App() {
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900">Inactive Loads</h3>
                   <p className="text-xs text-slate-500">
-                    Restore inactive loads back to organizer boards.
+                    Restore or permanently delete inactive loads.
                   </p>
                 </div>
-                <button
-                  onClick={() => setIsInactiveModalOpen(false)}
-                  className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void handleHardDeleteAllInactive()}
+                    disabled={inactiveLoads.length === 0 || isDeletingInactive}
+                    className="rounded border border-red-300 bg-white px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Delete All
+                  </button>
+                  <button
+                    onClick={() => setIsInactiveModalOpen(false)}
+                    className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -2362,6 +2457,13 @@ export default function App() {
                         </div>
 
                         <div className="mt-2 flex gap-1">
+                          <button
+                            onClick={() => void handleHardDeleteInactiveLoad(load.id)}
+                            disabled={isDeletingInactive}
+                            className="px-2 py-1 text-[10px] font-semibold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Delete
+                          </button>
                           <button
                             onClick={() => handleReactivateLoad(load.id)}
                             className="flex-1 px-2 py-1 text-[10px] font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
