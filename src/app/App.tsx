@@ -22,8 +22,10 @@ import { RouteModeToggle } from './components/RouteModeToggle';
 import { SimulationImpactPanel, type SimulationImpact } from './components/SimulationImpactPanel';
 import { RouteComparison } from './components/RouteComparison';
 import { TripSelector } from './components/TripSelector';
-import { loadApi } from '../api';
+import { documentApi, loadApi } from '../api';
 import type { Load as ApiLoad } from '../domain/entities';
+import { DocumentCategory, DocumentType } from '../domain/enums';
+import { API_BASE } from '../api/client';
 import {
   buildLoadUpsertDto,
   buildPlannerSyncFingerprint,
@@ -210,6 +212,9 @@ const formatDateTimeRange = (
   return `${startPoint} - ${endPoint}`;
 };
 
+const buildDocumentOpenUrl = (documentId: string): string =>
+  `${API_BASE}/documents/${encodeURIComponent(documentId)}/open`;
+
 const initialLoads: PlannerLoad[] = [
   {
     id: 'L001',
@@ -385,8 +390,8 @@ const initialStops: CanvasStop[] = [
 ];
 
 export default function App() {
-  const [loads, setLoads] = useState<PlannerLoad[]>(normalizedInitialLoads);
-  const [stops, setStops] = useState<CanvasStop[]>(initialStops);
+  const [loads, setLoads] = useState<PlannerLoad[]>([]);
+  const [stops, setStops] = useState<CanvasStop[]>([]);
   const [selectedStops, setSelectedStops] = useState<string[]>([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [loadedCargoIds, setLoadedCargoIds] = useState<string[]>([]); // Track which loads are in cargo
@@ -400,7 +405,7 @@ export default function App() {
     timeDelta: '+1h 20m',
     warnings: ['Pushes Stop 4 by +45m', '12 cm overflow at Stop 3'],
   });
-  const [selectedCargoStopId, setSelectedCargoStopId] = useState('S001'); // For cargo timeline
+  const [selectedCargoStopId, setSelectedCargoStopId] = useState(''); // For cargo timeline
   const [selectedTrip, setSelectedTrip] = useState('');
   const [organizerVanCargoPosition, setOrganizerVanCargoPosition] = useState({ x: 24, y: 24 });
   const [middleWorkspaceTab, setMiddleWorkspaceTab] = useState<MiddleWorkspaceTab>('load-planner');
@@ -511,21 +516,22 @@ export default function App() {
     [appendPlannerStopsForLoad],
   );
 
+  const handleFreightCreatedMany = useCallback(
+    (createdLoads: ApiLoad[]) => {
+      createdLoads.forEach((load) => {
+        handleFreightCreated(load);
+      });
+    },
+    [handleFreightCreated],
+  );
+
   useEffect(() => {
     let isCancelled = false;
 
     const hydratePlanner = async () => {
       try {
         const initialResponse = await loadApi.getAll({ limit: 200, offset: 0 });
-        let apiLoads = initialResponse.data;
-
-        if (apiLoads.length === 0) {
-          for (const seedLoad of normalizedInitialLoads) {
-            await loadApi.create(buildLoadUpsertDto(seedLoad));
-          }
-          const seededResponse = await loadApi.getAll({ limit: 200, offset: 0 });
-          apiLoads = seededResponse.data;
-        }
+        const apiLoads = initialResponse.data;
 
         if (isCancelled) return;
 
@@ -1266,6 +1272,38 @@ export default function App() {
     updateLoadTranseuLink(loadId, field, normalizedLink);
   };
 
+  const handleOpenLoadPdf = async (loadId: string) => {
+    const currentLoad = loads.find((load) => load.id === loadId);
+    if (!currentLoad) return;
+
+    if (currentLoad.sourceFreightPdfUrl) {
+      window.open(currentLoad.sourceFreightPdfUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    try {
+      const docs = await documentApi.getByEntity(DocumentCategory.LOAD, loadId);
+      const sourcePdfDoc =
+        docs.find((doc) => doc.documentType === DocumentType.FREIGHT_ORDER) ??
+        docs.find((doc) => doc.mimeType?.toLowerCase().includes('pdf'));
+
+      if (!sourcePdfDoc) {
+        window.alert('No PDF document found for this load.');
+        return;
+      }
+
+      const openUrl = buildDocumentOpenUrl(sourcePdfDoc.id);
+      setLoads((prev) =>
+        prev.map((load) => (load.id === loadId ? { ...load, sourceFreightPdfUrl: openUrl } : load)),
+      );
+      window.open(openUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to open PDF document.';
+      setLastPlannerSyncError(message);
+      window.alert(message);
+    }
+  };
+
   const updateLoadAddress = (
     loadId: string,
     field: 'originAddress' | 'destAddress',
@@ -1710,8 +1748,8 @@ export default function App() {
 
           </div>
 
-          <div className="grid h-full flex-1 min-w-0 grid-cols-[50%_50%] overflow-hidden">
-              <aside className="min-w-0 bg-white border-r border-gray-300 flex flex-col">
+          <div className="grid h-full min-h-0 flex-1 min-w-0 grid-cols-[50%_50%] overflow-hidden">
+              <aside className="min-w-0 min-h-0 bg-white border-r border-gray-300 flex flex-col">
                 <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -1739,8 +1777,8 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex-1 min-h-0 p-3 flex flex-col gap-3">
-                  <div className="min-h-0 flex-1 grid grid-cols-2 grid-rows-[minmax(0,3fr)_minmax(0,1fr)] gap-3">
+                <div className="flex-1 min-h-0 overflow-hidden p-3 flex flex-col gap-3">
+                  <div className="h-full min-h-0 flex-1 grid grid-cols-2 grid-rows-[minmax(0,3fr)_minmax(0,1fr)] gap-3">
                     {ORGANIZER_STATUSES.map((status) => {
                       const statusLoads = getOrganizerLoads(status);
                       const statusStyle =
@@ -1757,7 +1795,7 @@ export default function App() {
                           onDragOver={(event) => handleOrganizerDragOver(event, status)}
                           onDrop={(event) => handleOrganizerDrop(event, status)}
                           onDragLeave={() => setDragOverStatus(null)}
-                          className={`min-h-0 rounded-xl border p-3 transition-colors flex flex-col ${layoutStyle} ${
+                          className={`min-h-0 overflow-hidden rounded-xl border p-3 transition-colors flex flex-col ${layoutStyle} ${
                             dragOverStatus === status ? 'ring-2 ring-blue-400 ring-offset-1' : ''
                           } ${statusStyle}`}
                         >
@@ -1769,7 +1807,7 @@ export default function App() {
                           </div>
 
                           <div
-                            className={`mt-2 min-h-0 overflow-x-hidden overflow-y-auto pr-1 ${
+                            className={`mt-2 min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1 ${
                               status === 'TAKEN'
                                 ? 'grid grid-cols-4 gap-2 content-start items-start auto-rows-max'
                                 : 'grid grid-cols-2 gap-2 content-start items-start auto-rows-max'
@@ -1850,6 +1888,17 @@ export default function App() {
                                       </p>
                                     </div>
                                     <div className="relative flex items-center gap-1">
+                                      <button
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleOpenLoadPdf(load.id);
+                                        }}
+                                        className="rounded border border-blue-300 bg-white p-1 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                                        title="View source freight PDF"
+                                      >
+                                        <FileText className="h-3.5 w-3.5" />
+                                      </button>
                                       <button
                                         onMouseDown={(event) => event.stopPropagation()}
                                         onClick={(event) => {
@@ -2019,33 +2068,14 @@ export default function App() {
                                     </span>
                                   </button>
 
-                                  {(load.additionalDescription || load.sourceFreightPdfUrl) && (
-                                    <div className="mt-1.5 flex items-start justify-between gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                                  {load.additionalDescription && (
+                                    <div className="mt-1.5 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
                                       <p
                                         className="min-w-0 flex-1 text-[10px] leading-4 text-gray-600"
                                         title={load.additionalDescription || 'No additional description'}
                                       >
                                         {load.additionalDescription || 'No additional description'}
                                       </p>
-                                      {load.sourceFreightPdfUrl && (
-                                        <button
-                                          type="button"
-                                          onMouseDown={(event) => event.stopPropagation()}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            window.open(
-                                              load.sourceFreightPdfUrl,
-                                              '_blank',
-                                              'noopener,noreferrer',
-                                            );
-                                          }}
-                                          className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
-                                          title="Open source freight PDF"
-                                        >
-                                          <FileText className="h-3 w-3" />
-                                          PDF
-                                        </button>
-                                      )}
                                     </div>
                                   )}
 
@@ -2502,6 +2532,7 @@ export default function App() {
           isOpen={showUploadModal}
           onClose={() => setShowUploadModal(false)}
           onCreated={handleFreightCreated}
+          onCreatedMany={handleFreightCreatedMany}
           defaultTripId={selectedTrip}
         />
         <EditLoadModal

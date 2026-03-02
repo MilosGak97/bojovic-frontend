@@ -20,6 +20,7 @@ interface UploadModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated?: (load: Load) => void;
+  onCreatedMany?: (loads: Load[]) => void;
   defaultTripId?: string;
 }
 
@@ -47,7 +48,7 @@ interface ExtraStopDraft {
   notes: string;
 }
 
-type UploadModalTab = 'manual' | 'pdf';
+type UploadModalTab = 'manual' | 'pdf' | 'screenshot';
 
 const createRowId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -122,6 +123,7 @@ export function UploadModal({
   isOpen,
   onClose,
   onCreated,
+  onCreatedMany,
   defaultTripId,
 }: UploadModalProps) {
   const [activeTab, setActiveTab] = useState<UploadModalTab>('manual');
@@ -130,6 +132,7 @@ export function UploadModal({
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
   const [isLoadingTrips, setIsLoadingTrips] = useState(false);
   const [tripsError, setTripsError] = useState<string | null>(null);
@@ -239,6 +242,30 @@ export function UploadModal({
     };
   }, [isOpen, defaultTripId]);
 
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'screenshot') return;
+
+    const handleWindowPaste = (event: ClipboardEvent) => {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        if (!item.type.startsWith('image/')) continue;
+        const imageFile = item.getAsFile();
+        if (!imageFile) continue;
+        setScreenshotFile(imageFile);
+        setFormError(null);
+        event.preventDefault();
+        break;
+      }
+    };
+
+    window.addEventListener('paste', handleWindowPaste);
+    return () => {
+      window.removeEventListener('paste', handleWindowPaste);
+    };
+  }, [activeTab, isOpen]);
+
   if (!isOpen) return null;
 
   const updateForm = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
@@ -308,6 +335,7 @@ export function UploadModal({
     setPallets([defaultPalletRow()]);
     setExtraStops([]);
     setPdfFile(null);
+    setScreenshotFile(null);
   };
 
   const handleCreateFreight = async () => {
@@ -690,6 +718,7 @@ export function UploadModal({
 
       const createdLoad = await loadApi.create(payload);
       onCreated?.(createdLoad);
+      onCreatedMany?.([createdLoad]);
       setSuccessMessage(`Freight ${createdLoad.referenceNumber} created successfully.`);
       resetFormState();
       onClose();
@@ -715,11 +744,53 @@ export function UploadModal({
         status: form.status,
       });
       onCreated?.(createdLoad);
+      onCreatedMany?.([createdLoad]);
       setSuccessMessage(`Freight ${createdLoad.referenceNumber} created from PDF.`);
       resetFormState();
       onClose();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Failed to parse PDF and create freight.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCreateFromScreenshot = async () => {
+    setFormError(null);
+    setSuccessMessage(null);
+
+    if (!screenshotFile) {
+      setFormError('Paste or select a screenshot image first.');
+      return;
+    }
+    if (!form.tripId) {
+      setFormError('Select a trip first. Screenshot intake assigns loads directly to that trip.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const result = await loadApi.createFromScreenshot(screenshotFile, {
+        tripId: form.tripId,
+        status: LoadStatus.ON_BOARD,
+      });
+      if (onCreatedMany) {
+        onCreatedMany(result.created);
+      } else {
+        result.created.forEach((createdLoad) => onCreated?.(createdLoad));
+      }
+      const createdCount = result.created.length;
+      const skipped =
+        result.skippedCount > 0 ? `, skipped ${result.skippedCount}` : '';
+      const warningsText =
+        result.warnings.length > 0 ? ` Warnings: ${result.warnings.join(' | ')}` : '';
+      setSuccessMessage(`Created ${createdCount} load(s) from screenshot${skipped}.${warningsText}`);
+      resetFormState();
+      onClose();
+    } catch (error) {
+      setFormError(
+        error instanceof Error ? error.message : 'Failed to parse screenshot and create loads.',
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -733,7 +804,7 @@ export function UploadModal({
         <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-gray-900">Freight Intake</h2>
-            <p className="text-xs text-gray-500">Create manually or parse from PDF.</p>
+            <p className="text-xs text-gray-500">Create manually, parse from PDF, or parse from screenshot.</p>
           </div>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600">
             <X className="h-5 w-5" />
@@ -762,6 +833,17 @@ export function UploadModal({
             }`}
           >
             Upload PDF
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('screenshot')}
+            className={`rounded px-3 py-1.5 text-sm font-medium ${
+              activeTab === 'screenshot'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            Upload Screenshot
           </button>
         </div>
 
@@ -833,6 +915,88 @@ export function UploadModal({
                 </div>
               </div>
 
+            </div>
+          )}
+
+          {activeTab === 'screenshot' && (
+            <div className="space-y-4">
+              <div
+                className="rounded-lg border border-dashed border-gray-300 p-6 text-center"
+                onPaste={(event) => {
+                  const items = event.clipboardData?.items;
+                  if (!items) return;
+                  for (let index = 0; index < items.length; index += 1) {
+                    const item = items[index];
+                    if (!item.type.startsWith('image/')) continue;
+                    const imageFile = item.getAsFile();
+                    if (!imageFile) continue;
+                    setScreenshotFile(imageFile);
+                    setFormError(null);
+                    event.preventDefault();
+                    break;
+                  }
+                }}
+              >
+                <Upload className="mx-auto mb-3 h-9 w-9 text-gray-400" />
+                <p className="text-sm text-gray-700">
+                  Paste or upload a freight board screenshot.
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  AI will extract visible rows and create ON_BOARD loads in the selected trip.
+                </p>
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                  <label
+                    htmlFor="freight-screenshot-upload"
+                    className="inline-flex cursor-pointer rounded bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-700"
+                  >
+                    Select Image
+                  </label>
+                  <input
+                    id="freight-screenshot-upload"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) => setScreenshotFile(event.target.files?.[0] ?? null)}
+                  />
+                </div>
+                {screenshotFile && (
+                  <p className="mt-3 text-xs text-gray-600">
+                    Selected: {screenshotFile.name} ({Math.max(1, Math.round(screenshotFile.size / 1024))} KB)
+                  </p>
+                )}
+                <p className="mt-2 text-[11px] text-gray-500">
+                  Tip: copy screenshot, then press Cmd/Ctrl + V while this modal is open.
+                </p>
+                <div className="mx-auto mt-4 max-w-sm text-left">
+                  <label className="block text-xs text-gray-600">
+                    Add To Load Planner (Trip) *
+                    <select
+                      value={form.tripId}
+                      onChange={(event) => updateForm('tripId', event.target.value)}
+                      disabled={isLoadingTrips}
+                      className="mt-1 w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 disabled:bg-gray-100"
+                    >
+                      <option value="">Select trip</option>
+                      {activeTrips.map((trip) => {
+                        const driverName = trip.driver
+                          ? `${trip.driver.firstName} ${trip.driver.lastName}`.trim()
+                          : 'No driver';
+                        const vanInfo = trip.van
+                          ? `${trip.van.name} (${trip.van.licensePlate})`
+                          : 'No vehicle';
+                        return (
+                          <option key={trip.id} value={trip.id}>
+                            {driverName} — {vanInfo}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {tripsError && (
+                      <span className="mt-1 block text-[11px] text-rose-600">{tripsError}</span>
+                    )}
+                  </label>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1582,7 +1746,7 @@ export function UploadModal({
               {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Create Freight
             </button>
-          ) : (
+          ) : activeTab === 'pdf' ? (
             <button
               onClick={() => void handleCreateFromPdf()}
               disabled={isSubmitting || !pdfFile}
@@ -1590,6 +1754,15 @@ export function UploadModal({
             >
               {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Create From PDF
+            </button>
+          ) : (
+            <button
+              onClick={() => void handleCreateFromScreenshot()}
+              disabled={isSubmitting || !screenshotFile || !form.tripId}
+              className="inline-flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Create From Screenshot
             </button>
           )}
         </div>

@@ -809,6 +809,9 @@ export default function LoadBoardPage() {
         onCreated={() => {
           void fetchLoads(statusFilter);
         }}
+        onCreatedMany={() => {
+          void fetchLoads(statusFilter);
+        }}
       />
     </main>
   );

@@ -48,6 +48,13 @@ import type {
   UpdateEmailTemplateDto,
 } from '../domain/dto';
 
+export interface ScreenshotIntakeResult {
+  created: Load[];
+  extractedCount: number;
+  skippedCount: number;
+  warnings: string[];
+}
+
 // ─── Loads ──────────────────────────────────────────────
 export const loadApi = {
   getAll: (params?: { status?: LoadStatus; brokerId?: string; limit?: number; offset?: number }) => {
@@ -67,6 +74,16 @@ export const loadApi = {
     if (options?.tripId) formData.append('tripId', options.tripId);
     if (options?.status) formData.append('status', options.status);
     return api.postForm<Load>('/loads/intake/pdf', formData);
+  },
+  createFromScreenshot: (
+    file: File,
+    options?: { tripId?: string; status?: LoadStatus },
+  ) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.tripId) formData.append('tripId', options.tripId);
+    if (options?.status) formData.append('status', options.status);
+    return api.postForm<ScreenshotIntakeResult>('/loads/intake/screenshot', formData);
   },
   update: (id: string, data: unknown) => api.put<Load>(`/loads/${id}`, data),
   updateStatus: (id: string, status: LoadStatus) =>
