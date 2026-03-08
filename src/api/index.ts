@@ -52,6 +52,87 @@ export interface ScreenshotIntakeResult {
   created: Load[];
   extractedCount: number;
   skippedCount: number;
+  duplicateCount: number;
+  duplicates: Array<{
+    row: number;
+    reason: 'existing_load' | 'existing_reference' | 'duplicate_in_screenshot';
+    existingLoadId?: string;
+    existingReferenceNumber?: string;
+    brokerName: string | null;
+    pickupCity: string;
+    deliveryCity: string;
+    weightTons: number | null;
+  }>;
+  warnings: string[];
+}
+
+export interface ScreenshotPreviewResult {
+  extractedCount: number;
+  creatableCount: number;
+  skippedCount: number;
+  duplicateCount: number;
+  duplicates: ScreenshotIntakeResult['duplicates'];
+  candidates: Array<{
+    row: number;
+    referenceNumber: string | null;
+    brokerName: string | null;
+    brokerTransEuId: string | null;
+    brokerEmployeeCount: number | null;
+    brokerPaidOnTime: number | null;
+    brokerPaidWithDelay: number | null;
+    brokerPaymentIssues: number | null;
+    brokerRating: string | null;
+    brokerReviewCount: number | null;
+    pickupCountry: string;
+    pickupPostcode: string;
+    pickupCity: string;
+    pickupDateTimeIso: string | null;
+    deliveryCountry: string;
+    deliveryPostcode: string;
+    deliveryCity: string;
+    deliveryDateTimeIso: string | null;
+    priceAmount: number | null;
+    currency: string | null;
+    paymentTermDays: number | null;
+    weightTons: number | null;
+    loadingMeters: number | null;
+    distanceKm: number | null;
+    bodyTypeText: string | null;
+    bodySize: string | null;
+    freightMode: string | null;
+    additionalDescription: string | null;
+    offer: {
+      referenceNumber: string | null;
+      pickupCountry: string | null;
+      pickupPostcode: string | null;
+      pickupCity: string | null;
+      pickupDateTimeIso: string | null;
+      deliveryCountry: string | null;
+      deliveryPostcode: string | null;
+      deliveryCity: string | null;
+      deliveryDateTimeIso: string | null;
+      brokerName: string | null;
+      brokerTransEuId: string | null;
+      brokerEmployeeCount: number | null;
+      brokerPaidOnTime: number | null;
+      brokerPaidWithDelay: number | null;
+      brokerPaymentIssues: number | null;
+      brokerRating: string | null;
+      brokerReviewCount: number | null;
+      contactPerson: string | null;
+      contactPhone: string | null;
+      paymentTermDays: number | null;
+      priceAmount: number | null;
+      currency: string | null;
+      weightTons: number | null;
+      loadingMeters: number | null;
+      distanceKm: number | null;
+      bodyTypeText: string | null;
+      bodySize: string | null;
+      freightMode: string | null;
+      additionalDescription: string | null;
+    };
+  }>;
   warnings: string[];
 }
 
@@ -84,6 +165,29 @@ export const loadApi = {
     if (options?.tripId) formData.append('tripId', options.tripId);
     if (options?.status) formData.append('status', options.status);
     return api.postForm<ScreenshotIntakeResult>('/loads/intake/screenshot', formData);
+  },
+  previewFromScreenshot: (
+    file: File,
+    options?: { tripId?: string; status?: LoadStatus },
+  ) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.tripId) formData.append('tripId', options.tripId);
+    if (options?.status) formData.append('status', options.status);
+    return api.postForm<ScreenshotPreviewResult>('/loads/intake/screenshot/preview', formData);
+  },
+  commitFromScreenshotSelection: (
+    selectedOffers: unknown[],
+    options?: { tripId?: string; status?: LoadStatus; file?: File | null },
+  ) => {
+    const formData = new FormData();
+    if (options?.file) {
+      formData.append('file', options.file);
+    }
+    if (options?.tripId) formData.append('tripId', options.tripId);
+    if (options?.status) formData.append('status', options.status);
+    formData.append('selectedOffersJson', JSON.stringify(selectedOffers));
+    return api.postForm<ScreenshotIntakeResult>('/loads/intake/screenshot/commit', formData);
   },
   update: (id: string, data: unknown) => api.put<Load>(`/loads/${id}`, data),
   updateStatus: (id: string, status: LoadStatus) =>

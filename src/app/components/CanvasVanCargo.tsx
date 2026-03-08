@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { GripVertical, X, RotateCw, Package, Plus, AlertTriangle } from 'lucide-react';
+import { GripVertical, X, RotateCw, Plus, AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
 
 interface CargoItem {
   id: string;
@@ -37,6 +37,7 @@ interface CanvasVanCargoProps {
   x: number;
   y: number;
   onMove: (x: number, y: number) => void;
+  allowPanelDrag?: boolean;
   scale: number;
   stopNumber?: number;
   routedStops?: RouteStop[];
@@ -49,7 +50,7 @@ const TRUCK_LENGTH = 403; // cm
 const TRUCK_WIDTH = 220; // cm
 const EURO_PALLET_LENGTH = 120; // cm
 const EURO_PALLET_WIDTH = 80; // cm
-const SCALE = 0.8; // visual scale for display
+const DEFAULT_RENDER_SCALE = 0.8;
 const GRID_SIZE = 10; // 10cm grid
 
 export function CanvasVanCargo({
@@ -57,6 +58,7 @@ export function CanvasVanCargo({
   x,
   y,
   onMove,
+  allowPanelDrag = true,
   scale,
   stopNumber,
   routedStops,
@@ -81,6 +83,36 @@ export function CanvasVanCargo({
   const dragStartPos = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 });
   const panelRef = useRef<HTMLDivElement>(null);
   const cargoGridRef = useRef<HTMLDivElement>(null);
+  const [gridPixelWidth, setGridPixelWidth] = useState(TRUCK_LENGTH * DEFAULT_RENDER_SCALE);
+  const renderScale =
+    gridPixelWidth > 0 ? gridPixelWidth / TRUCK_LENGTH : DEFAULT_RENDER_SCALE;
+
+  useEffect(() => {
+    if (isCollapsed) return;
+    const gridElement = cargoGridRef.current;
+    if (!gridElement) return;
+
+    const updateWidth = () => {
+      const nextWidth = gridElement.getBoundingClientRect().width;
+      if (Number.isFinite(nextWidth) && nextWidth > 0) {
+        setGridPixelWidth(nextWidth);
+      }
+    };
+
+    updateWidth();
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const nextWidth = entries[0]?.contentRect.width ?? 0;
+      if (Number.isFinite(nextWidth) && nextWidth > 0) {
+        setGridPixelWidth(nextWidth);
+      }
+    });
+    resizeObserver.observe(gridElement);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [isCollapsed]);
 
   // Calculate euro pallet grid
   const palletsInLength = Math.floor(TRUCK_LENGTH / EURO_PALLET_LENGTH);
@@ -339,6 +371,7 @@ export function CanvasVanCargo({
   };
 
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
+    if (!allowPanelDrag) return;
     setIsDragging(true);
     dragStartPos.current = {
       x: e.clientX,
@@ -351,6 +384,8 @@ export function CanvasVanCargo({
   };
 
   useEffect(() => {
+    if (!allowPanelDrag) return;
+
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging) return;
       
@@ -375,7 +410,7 @@ export function CanvasVanCargo({
         window.removeEventListener('mouseup', handleMouseUp);
       };
     }
-  }, [isDragging, x, y, scale, onMove]);
+  }, [allowPanelDrag, isDragging, x, y, scale, onMove]);
 
   // Clear measurement on ESC key
   useEffect(() => {
@@ -409,9 +444,9 @@ export function CanvasVanCargo({
     const clickX = e.clientX - gridRect.left;
     const clickY = e.clientY - gridRect.top;
 
-    // Convert from pixels to cm (accounting for SCALE)
-    const xCm = clickX / SCALE;
-    const yCm = clickY / SCALE;
+    // Convert from pixels to cm using current rendered grid scale
+    const xCm = clickX / renderScale;
+    const yCm = clickY / renderScale;
 
     // Snap to nearest grid point (10cm)
     const snappedX = Math.round(xCm / GRID_SIZE) * GRID_SIZE;
@@ -541,8 +576,8 @@ export function CanvasVanCargo({
     
     setDraggingCargoId(item.id);
     
-    const itemLeft = item.x * SCALE;
-    const itemTop = item.y * SCALE;
+    const itemLeft = item.x * renderScale;
+    const itemTop = item.y * renderScale;
     
     setDragOffset({
       x: e.clientX - gridRect.left - itemLeft,
@@ -570,8 +605,8 @@ export function CanvasVanCargo({
 
     const handleMouseUp = () => {
       // Convert pixel position back to cm
-      const xCm = tempPosition.x / SCALE;
-      const yCm = tempPosition.y / SCALE;
+      const xCm = tempPosition.x / renderScale;
+      const yCm = tempPosition.y / renderScale;
 
       const draggingItem = cargoItems.find(item => item.id === draggingCargoId);
       if (!draggingItem) {
@@ -676,7 +711,7 @@ export function CanvasVanCargo({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingCargoId, dragOffset, tempPosition, cargoItems]);
+  }, [draggingCargoId, dragOffset, tempPosition, cargoItems, renderScale]);
 
   const effectiveSelectedStopId =
     selectedStopId && orderedRoutedStops.some((stop) => stop.id === selectedStopId)
@@ -808,23 +843,27 @@ export function CanvasVanCargo({
   return (
     <div
       ref={panelRef}
-      className={`absolute bg-white border-2 border-gray-300 shadow-lg ${
+      className={`${allowPanelDrag ? 'absolute' : 'relative'} bg-white border-2 border-gray-300 shadow-lg ${
         isDragging ? 'shadow-2xl z-50' : ''
       }`}
       style={{
-        left: x,
-        top: y,
-        width: 750,
+        left: allowPanelDrag ? x : undefined,
+        top: allowPanelDrag ? y : undefined,
+        width: allowPanelDrag ? 750 : '100%',
+        maxWidth: undefined,
+        margin: allowPanelDrag ? undefined : 0,
         userSelect: 'none',
       }}
     >
       {/* Header */}
       <div
         onMouseDown={handleHeaderMouseDown}
-        className="bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between cursor-grab active:cursor-grabbing"
+        className={`bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between ${
+          allowPanelDrag ? 'cursor-grab active:cursor-grabbing' : ''
+        }`}
       >
         <div className="flex items-center gap-2">
-          <GripVertical className="w-4 h-4 text-gray-400" />
+          {allowPanelDrag ? <GripVertical className="w-4 h-4 text-gray-400" /> : null}
           
           {/* Stop Stepper */}
           {orderedRoutedStops.length > 0 && (
@@ -880,11 +919,12 @@ export function CanvasVanCargo({
           <button
             onClick={() => setIsCollapsed(!isCollapsed)}
             className="p-1 hover:bg-gray-200"
+            title={isCollapsed ? 'Expand planner' : 'Collapse planner'}
           >
             {isCollapsed ? (
-              <Package className="w-4 h-4 text-gray-600" />
+              <ChevronDown className="w-4 h-4 text-gray-600" />
             ) : (
-              <X className="w-4 h-4 text-gray-600" />
+              <ChevronUp className="w-4 h-4 text-gray-600" />
             )}
           </button>
         </div>
@@ -962,24 +1002,13 @@ export function CanvasVanCargo({
           )}
 
           {/* Cargo Area */}
-          <div className="p-6 bg-gray-50 flex gap-4">
-            <div className="relative flex-1">
-              {/* Top margin - Space from top edge to topmost pallet */}
-              <div 
-                className="absolute -top-7 flex items-center justify-center px-1"
-                style={{
-                  left: 0,
-                  width: TRUCK_LENGTH * SCALE,
-                }}
-              >
-                <div className="text-xs text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded">
+          <div className="bg-gray-50 p-6">
+            <div className="flex w-full flex-col items-stretch">
+              <div className="mb-2 flex w-full items-center justify-between gap-3">
+                <div className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
                   ↑ {topSpace} cm free ↑
                 </div>
-              </div>
-
-              {/* Left side - Truck dimensions */}
-              <div className="absolute -left-16 top-0 bottom-0 flex items-center">
-                <div className="transform -rotate-90 text-xs text-gray-700 font-bold whitespace-nowrap bg-gray-100 px-2 py-1 rounded">
+                <div className="text-xs font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
                   {TRUCK_LENGTH} × {TRUCK_WIDTH} cm
                 </div>
               </div>
@@ -989,13 +1018,13 @@ export function CanvasVanCargo({
                 ref={cargoGridRef}
                 className="relative bg-white border-2 border-gray-400"
                 style={{
-                  width: TRUCK_LENGTH * SCALE,
-                  height: TRUCK_WIDTH * SCALE,
+                  width: '100%',
+                  aspectRatio: `${TRUCK_LENGTH} / ${TRUCK_WIDTH}`,
                   backgroundImage: `
                     linear-gradient(to right, #e5e7eb 1px, transparent 1px),
                     linear-gradient(to bottom, #e5e7eb 1px, transparent 1px)
                   `,
-                  backgroundSize: `${GRID_SIZE * SCALE}px ${GRID_SIZE * SCALE}px`,
+                  backgroundSize: `${GRID_SIZE * renderScale}px ${GRID_SIZE * renderScale}px`,
                 }}
                 onClick={handleGridClick}
               >
@@ -1004,8 +1033,8 @@ export function CanvasVanCargo({
                   const editingItem = cargoInGrid.find(i => i.id === editingDimensionsId);
                   if (!editingItem) return null;
                   
-                  const itemCenterX = (editingItem.x + editingItem.width / 2) * SCALE;
-                  const itemTopY = editingItem.y * SCALE;
+                  const itemCenterX = (editingItem.x + editingItem.width / 2) * renderScale;
+                  const itemTopY = editingItem.y * renderScale;
                   
                   return (
                     <div
@@ -1076,8 +1105,8 @@ export function CanvasVanCargo({
                 {cargoInGrid.map((item) => {
                   const isDraggingThis = draggingCargoId === item.id;
                   const isEditing = editingDimensionsId === item.id;
-                  const left = isDraggingThis ? tempPosition.x : item.x * SCALE;
-                  const top = isDraggingThis ? tempPosition.y : item.y * SCALE;
+                  const left = isDraggingThis ? tempPosition.x : item.x * renderScale;
+                  const top = isDraggingThis ? tempPosition.y : item.y * renderScale;
                   
                   return (
                     <div
@@ -1088,8 +1117,8 @@ export function CanvasVanCargo({
                       style={{
                         left,
                         top,
-                        width: item.width * SCALE,
-                        height: item.height * SCALE,
+                        width: item.width * renderScale,
+                        height: item.height * renderScale,
                         backgroundColor: item.color,
                         opacity: isDraggingThis ? 0.7 : 0.85,
                         border: '2px solid white',
@@ -1176,13 +1205,13 @@ export function CanvasVanCargo({
                 {measurementPoint && measurementSpaces && (
                   <>
                     {/* Center point dot */}
-                    <div
-                      className="absolute w-4 h-4 bg-orange-500 rounded-full border-2 border-white shadow-lg pointer-events-none z-50"
-                      style={{
-                        left: measurementPoint.x * SCALE - 8,
-                        top: measurementPoint.y * SCALE - 8,
-                      }}
-                    />
+                        <div
+                          className="absolute w-4 h-4 bg-orange-500 rounded-full border-2 border-white shadow-lg pointer-events-none z-50"
+                          style={{
+                        left: measurementPoint.x * renderScale - 8,
+                        top: measurementPoint.y * renderScale - 8,
+                          }}
+                        />
                     
                     {/* Horizontal measurement */}
                     {measurementSpaces.horizontal > 0 && (
@@ -1192,8 +1221,8 @@ export function CanvasVanCargo({
                           className="absolute bg-blue-500 pointer-events-none z-50"
                           style={{
                             left: 0,
-                            top: measurementPoint.y * SCALE - 1,
-                            width: TRUCK_LENGTH * SCALE,
+                            top: measurementPoint.y * renderScale - 1,
+                            width: TRUCK_LENGTH * renderScale,
                             height: '2px',
                             opacity: 0.4,
                           }}
@@ -1202,8 +1231,8 @@ export function CanvasVanCargo({
                         <div
                           className="absolute bg-blue-600 text-white px-3 py-1.5 rounded shadow-xl text-sm font-bold pointer-events-none z-50 whitespace-nowrap"
                           style={{
-                            left: measurementPoint.x * SCALE,
-                            top: measurementPoint.y * SCALE - 35,
+                            left: measurementPoint.x * renderScale,
+                            top: measurementPoint.y * renderScale - 35,
                             transform: 'translateX(-50%)',
                           }}
                         >
@@ -1219,10 +1248,10 @@ export function CanvasVanCargo({
                         <div
                           className="absolute bg-green-500 pointer-events-none z-50"
                           style={{
-                            left: measurementPoint.x * SCALE - 1,
+                            left: measurementPoint.x * renderScale - 1,
                             top: 0,
                             width: '2px',
-                            height: TRUCK_WIDTH * SCALE,
+                            height: TRUCK_WIDTH * renderScale,
                             opacity: 0.4,
                           }}
                         />
@@ -1230,8 +1259,8 @@ export function CanvasVanCargo({
                         <div
                           className="absolute bg-green-600 text-white px-3 py-1.5 rounded shadow-xl text-sm font-bold pointer-events-none z-50 whitespace-nowrap"
                           style={{
-                            left: measurementPoint.x * SCALE + 35,
-                            top: measurementPoint.y * SCALE,
+                            left: measurementPoint.x * renderScale + 35,
+                            top: measurementPoint.y * renderScale,
                             transform: 'translateY(-50%)',
                           }}
                         >
@@ -1250,25 +1279,23 @@ export function CanvasVanCargo({
 
               {/* Bottom margin - Space remaining from bottom edge */}
               <div 
-                className="mt-3 flex items-center justify-center"
-                style={{
-                  width: TRUCK_LENGTH * SCALE,
-                }}
+                className="mt-3 flex items-center justify-start"
+                style={{ width: '100%' }}
               >
-                <div className="text-xs text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded">
+                <div className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
                   ↓ {bottomSpace} cm free ↓
                 </div>
               </div>
             </div>
 
-            {/* Overflow Area (on the side) */}
+            {/* Overflow Area (below planner) */}
             {cargoOverflow.length > 0 && (
-              <div className="w-32 border-2 border-red-300 bg-red-50">
+              <div className="mt-4 border-2 border-red-300 bg-red-50">
                 <div className="bg-red-100 border-b border-red-300 px-2 py-1 text-xs font-semibold text-red-700 flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3" />
                   <span>Overflow</span>
                 </div>
-                <div className="p-2 space-y-2">
+                <div className="p-2 flex flex-wrap gap-2">
                   {cargoOverflow.map((item) => (
                     <div
                       key={item.id}

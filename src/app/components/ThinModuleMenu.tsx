@@ -3,11 +3,11 @@ import {
   BriefcaseBusiness,
   Building2,
   CalendarClock,
-  ChevronDown,
-  ChevronRight,
   HandCoins,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Route,
   Settings,
   Truck,
@@ -38,7 +38,7 @@ type NavItem = {
 };
 
 const ROLE_STORAGE_KEY = 'bojovic_user_role';
-const MORE_TOOLS_OPEN_STORAGE_KEY = 'bojovic_nav_more_tools_open';
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'bojovic_nav_sidebar_collapsed';
 
 const MAIN_NAV_ITEMS: Array<NavItem & { id: MainNavId }> = [
   { id: 'ROUTE_PLANNER', label: 'Route Planner', to: '/route-planner', icon: Route },
@@ -83,9 +83,9 @@ const getInitialRole = (): UserRole => {
   return 'ADMIN';
 };
 
-const getInitialMoreToolsOpen = (): boolean => {
+const getInitialSidebarCollapsed = (): boolean => {
   if (typeof window === 'undefined') return false;
-  const stored = window.localStorage.getItem(MORE_TOOLS_OPEN_STORAGE_KEY);
+  const stored = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
   return stored === '1';
 };
 
@@ -99,9 +99,10 @@ type NavigationBlockProps = {
   pathname: string;
   items: NavItem[];
   onNavigate?: () => void;
+  compact?: boolean;
 };
 
-function NavigationBlock({ pathname, items, onNavigate }: NavigationBlockProps) {
+function NavigationBlock({ pathname, items, onNavigate, compact = false }: NavigationBlockProps) {
   return (
     <div className="space-y-1">
       {items.map((item) => {
@@ -112,14 +113,19 @@ function NavigationBlock({ pathname, items, onNavigate }: NavigationBlockProps) 
             key={item.id}
             to={item.to}
             onClick={onNavigate}
-            className={`group flex items-center gap-2 rounded-md px-2.5 py-2 text-sm font-medium transition-colors ${
+            title={compact ? item.label : undefined}
+            className={`group flex rounded-md text-sm font-medium transition-colors ${
               isActive
                 ? 'bg-white text-slate-900'
                 : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+            } ${
+              compact
+                ? 'items-center justify-center px-2 py-2.5'
+                : 'items-center gap-2 px-2.5 py-2'
             }`}
           >
             <Icon className="h-4 w-4 shrink-0" />
-            <span className="truncate">{item.label}</span>
+            {!compact && <span className="truncate">{item.label}</span>}
           </Link>
         );
       })}
@@ -131,15 +137,21 @@ export function ThinModuleMenu() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [isMoreToolsOpen, setIsMoreToolsOpen] = useState(getInitialMoreToolsOpen);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialSidebarCollapsed);
   const [activeRole, setActiveRole] = useState<UserRole>(getInitialRole);
 
   useEffect(() => {
     document.body.classList.add('app-shell-sidebar-layout');
+    if (isSidebarCollapsed) {
+      document.body.classList.add('app-shell-sidebar-collapsed');
+    } else {
+      document.body.classList.remove('app-shell-sidebar-collapsed');
+    }
     return () => {
       document.body.classList.remove('app-shell-sidebar-layout');
+      document.body.classList.remove('app-shell-sidebar-collapsed');
     };
-  }, []);
+  }, [isSidebarCollapsed]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -152,17 +164,17 @@ export function ThinModuleMenu() {
 
   useEffect(() => {
     window.localStorage.setItem(
-      MORE_TOOLS_OPEN_STORAGE_KEY,
-      isMoreToolsOpen ? '1' : '0',
+      SIDEBAR_COLLAPSED_STORAGE_KEY,
+      isSidebarCollapsed ? '1' : '0',
     );
-  }, [isMoreToolsOpen]);
+  }, [isSidebarCollapsed]);
 
   const visibleMainItems = useMemo(() => {
     const allowed = new Set(MAIN_NAV_BY_ROLE[activeRole]);
     return MAIN_NAV_ITEMS.filter((item) => allowed.has(item.id));
   }, [activeRole]);
 
-  const visibleMoreTools = useMemo(
+  const visibleAdditionalItems = useMemo(
     () =>
       MORE_TOOLS_ITEMS.filter(
         (item) => !item.roles || item.roles.includes(activeRole),
@@ -170,10 +182,15 @@ export function ThinModuleMenu() {
     [activeRole],
   );
 
+  const visibleNavItems = useMemo(
+    () => [...visibleMainItems, ...visibleAdditionalItems],
+    [visibleMainItems, visibleAdditionalItems],
+  );
+
   const currentMainLabel = useMemo(
     () =>
-      visibleMainItems.find((item) => isItemActive(location.pathname, item))?.label ?? 'Navigation',
-    [location.pathname, visibleMainItems],
+      visibleNavItems.find((item) => isItemActive(location.pathname, item))?.label ?? 'Navigation',
+    [location.pathname, visibleNavItems],
   );
 
   const handleSignOut = () => {
@@ -183,46 +200,60 @@ export function ThinModuleMenu() {
 
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-slate-800 bg-slate-950 text-slate-100 md:flex md:flex-col">
-        <div className="border-b border-slate-800 px-4 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-            Bojovic
-          </p>
-          <p className="mt-1 text-sm font-semibold text-white">Operations Suite</p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3 py-3">
-          <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Main</p>
-          <NavigationBlock pathname={location.pathname} items={visibleMainItems} />
-
-          {visibleMoreTools.length > 0 && (
-            <div className="mt-4">
-              <button
-                type="button"
-                onClick={() => setIsMoreToolsOpen((prev) => !prev)}
-                className="flex w-full items-center justify-between rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
-              >
-                <span>More tools</span>
-                {isMoreToolsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              </button>
-
-              {isMoreToolsOpen && (
-                <div className="mt-1">
-                  <NavigationBlock pathname={location.pathname} items={visibleMoreTools} />
-                </div>
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 hidden border-r border-slate-800 bg-slate-950 text-slate-100 md:flex md:flex-col ${
+          isSidebarCollapsed ? 'w-20' : 'w-64'
+        }`}
+      >
+        <div className={`border-b border-slate-800 ${isSidebarCollapsed ? 'px-2 py-3' : 'px-4 py-3'}`}>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                Bojovic
+              </p>
+              {!isSidebarCollapsed && (
+                <p className="mt-1 text-sm font-semibold text-white">Operations Suite</p>
               )}
             </div>
-          )}
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+              title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {isSidebarCollapsed ? (
+                <PanelLeftOpen className="h-4 w-4" />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" />
+              )}
+            </button>
+          </div>
         </div>
 
-        <div className="border-t border-slate-800 p-3">
+        <div className={`flex-1 overflow-y-auto py-3 ${isSidebarCollapsed ? 'px-2' : 'px-3'}`}>
+          {!isSidebarCollapsed && (
+            <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              Navigation
+            </p>
+          )}
+          <NavigationBlock
+            pathname={location.pathname}
+            items={visibleNavItems}
+            compact={isSidebarCollapsed}
+          />
+        </div>
+
+        <div className={`border-t border-slate-800 ${isSidebarCollapsed ? 'p-2' : 'p-3'}`}>
           <button
             type="button"
             onClick={handleSignOut}
-            className="flex w-full items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white"
+            title={isSidebarCollapsed ? 'Sign out' : undefined}
+            className={`flex w-full items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white ${
+              isSidebarCollapsed ? 'px-2 py-2' : 'gap-2 px-3 py-2'
+            }`}
           >
             <LogOut className="h-3.5 w-3.5" />
-            Sign out
+            {!isSidebarCollapsed && 'Sign out'}
           </button>
         </div>
       </aside>
@@ -244,26 +275,11 @@ export function ThinModuleMenu() {
             </SheetHeader>
 
             <div className="flex-1 overflow-y-auto px-3 py-3">
-              <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Main</p>
-              <NavigationBlock pathname={location.pathname} items={visibleMainItems} onNavigate={() => setMobileOpen(false)} />
-
-              {visibleMoreTools.length > 0 && (
-                <div className="mt-4">
-                  <button
-                    type="button"
-                    onClick={() => setIsMoreToolsOpen((prev) => !prev)}
-                    className="flex w-full items-center justify-between rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200"
-                  >
-                    <span>More tools</span>
-                    {isMoreToolsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                  </button>
-                  {isMoreToolsOpen && (
-                    <div className="mt-1">
-                      <NavigationBlock pathname={location.pathname} items={visibleMoreTools} onNavigate={() => setMobileOpen(false)} />
-                    </div>
-                  )}
-                </div>
-              )}
+              <NavigationBlock
+                pathname={location.pathname}
+                items={visibleNavItems}
+                onNavigate={() => setMobileOpen(false)}
+              />
             </div>
 
             <SheetFooter className="border-t border-slate-800 p-3">

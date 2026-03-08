@@ -6,4 +6,8 @@
   body.app-shell-sidebar-layout #root {
     padding-left: 16rem;
   }
+
+  body.app-shell-sidebar-layout.app-shell-sidebar-collapsed #root {
+    padding-left: 5rem;
+  }
 }

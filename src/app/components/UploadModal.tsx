@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Plus, Trash2, Upload, X } from 'lucide-react';
 import { brokerApi, brokerContactApi, loadApi, tripApi } from '../../api';
+import type { ScreenshotIntakeResult, ScreenshotPreviewResult } from '../../api';
 import type { CreateBrokerCompanyDto, CreateBrokerContactDto, CreateLoadDto } from '../../domain/dto';
 import {
   Currency,
@@ -22,6 +23,10 @@ interface UploadModalProps {
   onCreated?: (load: Load) => void;
   onCreatedMany?: (loads: Load[]) => void;
   defaultTripId?: string;
+  initialTab?: UploadModalTab;
+  initialScreenshotFile?: File | null;
+  autoAnalyzeScreenshot?: boolean;
+  onInitialScreenshotConsumed?: () => void;
 }
 
 interface PalletDraft {
@@ -49,6 +54,11 @@ interface ExtraStopDraft {
 }
 
 type UploadModalTab = 'manual' | 'pdf' | 'screenshot';
+
+interface DuplicatePopupState {
+  count: number;
+  duplicates: ScreenshotIntakeResult['duplicates'];
+}
 
 const createRowId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -119,12 +129,37 @@ const splitContactName = (fullName: string): { firstName: string; lastName: stri
   };
 };
 
+const formatPreviewDateTime = (isoValue?: string | null): string => {
+  if (!isoValue) return '—';
+  const parsed = new Date(isoValue);
+  if (Number.isNaN(parsed.getTime())) return '—';
+  return parsed.toLocaleString('en-GB', {
+    timeZone: 'Europe/Belgrade',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+const formatPreviewMoney = (amount?: number | null, currency?: string | null): string => {
+  if (amount === null || amount === undefined || !Number.isFinite(amount)) return '—';
+  const code = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'EUR';
+  return `${amount.toFixed(2)} ${code}`;
+};
+
 export function UploadModal({
   isOpen,
   onClose,
   onCreated,
   onCreatedMany,
   defaultTripId,
+  initialTab,
+  initialScreenshotFile,
+  autoAnalyzeScreenshot = false,
+  onInitialScreenshotConsumed,
 }: UploadModalProps) {
   const [activeTab, setActiveTab] = useState<UploadModalTab>('manual');
   const [isBrokerTranseuExpanded, setIsBrokerTranseuExpanded] = useState(false);
@@ -133,6 +168,10 @@ export function UploadModal({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
+  const [duplicatePopup, setDuplicatePopup] = useState<DuplicatePopupState | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState<ScreenshotPreviewResult | null>(null);
+  const [selectedPreviewRows, setSelectedPreviewRows] = useState<number[]>([]);
+  const [shouldAutoAnalyzeScreenshot, setShouldAutoAnalyzeScreenshot] = useState(false);
   const [activeTrips, setActiveTrips] = useState<Trip[]>([]);
   const [isLoadingTrips, setIsLoadingTrips] = useState(false);
   const [tripsError, setTripsError] = useState<string | null>(null);
@@ -254,6 +293,8 @@ export function UploadModal({
         const imageFile = item.getAsFile();
         if (!imageFile) continue;
         setScreenshotFile(imageFile);
+        setScreenshotPreview(null);
+        setSelectedPreviewRows([]);
         setFormError(null);
         event.preventDefault();
         break;
@@ -266,7 +307,30 @@ export function UploadModal({
     };
   }, [activeTab, isOpen]);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) return;
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !initialScreenshotFile) return;
+    setActiveTab('screenshot');
+    setScreenshotFile(initialScreenshotFile);
+    setScreenshotPreview(null);
+    setSelectedPreviewRows([]);
+    setFormError(null);
+    if (autoAnalyzeScreenshot) {
+      setShouldAutoAnalyzeScreenshot(true);
+    }
+    onInitialScreenshotConsumed?.();
+  }, [
+    autoAnalyzeScreenshot,
+    initialScreenshotFile,
+    isOpen,
+    onInitialScreenshotConsumed,
+  ]);
 
   const updateForm = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -336,6 +400,15 @@ export function UploadModal({
     setExtraStops([]);
     setPdfFile(null);
     setScreenshotFile(null);
+    setDuplicatePopup(null);
+    setScreenshotPreview(null);
+    setSelectedPreviewRows([]);
+  };
+
+  const handleCloseDuplicatePopup = () => {
+    setDuplicatePopup(null);
+    resetFormState();
+    onClose();
   };
 
   const handleCreateFreight = async () => {
@@ -770,31 +843,129 @@ export function UploadModal({
 
     setIsSubmitting(true);
     try {
-      const result = await loadApi.createFromScreenshot(screenshotFile, {
+      setScreenshotPreview(null);
+      setSelectedPreviewRows([]);
+      const preview = await loadApi.previewFromScreenshot(screenshotFile, {
         tripId: form.tripId,
         status: LoadStatus.ON_BOARD,
       });
-      if (onCreatedMany) {
-        onCreatedMany(result.created);
-      } else {
-        result.created.forEach((createdLoad) => onCreated?.(createdLoad));
+
+      if (preview.candidates.length === 0) {
+        if (preview.duplicateCount > 0) {
+          setDuplicatePopup({
+            count: preview.duplicateCount,
+            duplicates: preview.duplicates,
+          });
+        } else {
+          setFormError('No creatable routes found in screenshot.');
+        }
+        return;
       }
-      const createdCount = result.created.length;
-      const skipped =
-        result.skippedCount > 0 ? `, skipped ${result.skippedCount}` : '';
-      const warningsText =
-        result.warnings.length > 0 ? ` Warnings: ${result.warnings.join(' | ')}` : '';
-      setSuccessMessage(`Created ${createdCount} load(s) from screenshot${skipped}.${warningsText}`);
-      resetFormState();
-      onClose();
+
+      setScreenshotPreview(preview);
+      setSelectedPreviewRows(preview.candidates.map((candidate) => candidate.row));
     } catch (error) {
       setFormError(
-        error instanceof Error ? error.message : 'Failed to parse screenshot and create loads.',
+        error instanceof Error ? error.message : 'Failed to analyze screenshot.',
       );
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen || !shouldAutoAnalyzeScreenshot) return;
+    if (activeTab !== 'screenshot') return;
+    if (!screenshotFile || !form.tripId) return;
+    if (isSubmitting || screenshotPreview) return;
+    setShouldAutoAnalyzeScreenshot(false);
+    void handleCreateFromScreenshot();
+  }, [
+    activeTab,
+    form.tripId,
+    handleCreateFromScreenshot,
+    isOpen,
+    isSubmitting,
+    screenshotFile,
+    screenshotPreview,
+    shouldAutoAnalyzeScreenshot,
+  ]);
+
+  const handleCommitScreenshotPreview = async () => {
+    if (!screenshotPreview) return;
+    if (!form.tripId) {
+      setFormError('Select a trip first.');
+      return;
+    }
+
+    const selectedOffers = screenshotPreview.candidates
+      .filter((candidate) => selectedPreviewRows.includes(candidate.row))
+      .map((candidate) => candidate.offer);
+
+    if (selectedOffers.length === 0) {
+      setFormError('Select at least one route from screenshot preview.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormError(null);
+    setSuccessMessage(null);
+    const previewDuplicateCount = screenshotPreview.duplicateCount;
+    const previewDuplicates = screenshotPreview.duplicates;
+    try {
+      const result = await loadApi.commitFromScreenshotSelection(selectedOffers, {
+        tripId: form.tripId,
+        status: LoadStatus.ON_BOARD,
+        file: screenshotFile,
+      });
+
+      if (onCreatedMany) {
+        onCreatedMany(result.created);
+      } else {
+        result.created.forEach((createdLoad) => onCreated?.(createdLoad));
+      }
+
+      const createdCount = result.created.length;
+      const totalDuplicateCount = previewDuplicateCount + result.duplicateCount;
+      const duplicateInfo =
+        totalDuplicateCount > 0 ? `, ignored duplicates ${totalDuplicateCount}` : '';
+      const skipped = result.skippedCount > 0 ? `, skipped ${result.skippedCount}` : '';
+      const warningsText =
+        result.warnings.length > 0 ? ` Warnings: ${result.warnings.join(' | ')}` : '';
+      const successText =
+        createdCount === 0 && totalDuplicateCount > 0
+          ? `No new loads created. ${totalDuplicateCount} duplicate row(s) were ignored.${warningsText}`
+          : `Created ${createdCount} load(s) from screenshot${duplicateInfo}${skipped}.${warningsText}`;
+      setSuccessMessage(successText);
+      setScreenshotPreview(null);
+      setSelectedPreviewRows([]);
+
+      if (totalDuplicateCount > 0) {
+        setDuplicatePopup({
+          count: totalDuplicateCount,
+          duplicates: [...previewDuplicates, ...result.duplicates],
+        });
+        return;
+      }
+
+      resetFormState();
+      onClose();
+    } catch (error) {
+      setFormError(
+        error instanceof Error ? error.message : 'Failed to create routes from screenshot preview.',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTogglePreviewRow = (row: number) => {
+    setSelectedPreviewRows((prev) =>
+      prev.includes(row) ? prev.filter((entry) => entry !== row) : [...prev, row],
+    );
+  };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -931,6 +1102,8 @@ export function UploadModal({
                     const imageFile = item.getAsFile();
                     if (!imageFile) continue;
                     setScreenshotFile(imageFile);
+                    setScreenshotPreview(null);
+                    setSelectedPreviewRows([]);
                     setFormError(null);
                     event.preventDefault();
                     break;
@@ -956,7 +1129,11 @@ export function UploadModal({
                     type="file"
                     accept="image/*"
                     className="hidden"
-                    onChange={(event) => setScreenshotFile(event.target.files?.[0] ?? null)}
+                    onChange={(event) => {
+                      setScreenshotFile(event.target.files?.[0] ?? null);
+                      setScreenshotPreview(null);
+                      setSelectedPreviewRows([]);
+                    }}
                   />
                 </div>
                 {screenshotFile && (
@@ -997,6 +1174,12 @@ export function UploadModal({
                   </label>
                 </div>
               </div>
+              {screenshotPreview && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  Parsed {screenshotPreview.extractedCount} row(s). Select and confirm routes in
+                  the preview popup.
+                </div>
+              )}
             </div>
           )}
 
@@ -1762,10 +1945,218 @@ export function UploadModal({
               className="inline-flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Create From Screenshot
+              Analyze Screenshot
             </button>
           )}
         </div>
+
+        {screenshotPreview && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/45 p-4">
+            <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Confirm Routes From Screenshot
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  Duplicate check is done. Select routes you want to add into route planner.
+                </p>
+              </div>
+
+              <div className="border-b border-slate-200 px-4 py-3">
+                <div className="grid gap-2 text-[11px] text-slate-700 md:grid-cols-4">
+                  <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                    Extracted: {screenshotPreview.extractedCount}
+                  </span>
+                  <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">
+                    Creatable: {screenshotPreview.creatableCount}
+                  </span>
+                  <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
+                    Duplicates: {screenshotPreview.duplicateCount}
+                  </span>
+                  <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+                    Selected: {selectedPreviewRows.length}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedPreviewRows(
+                        screenshotPreview.candidates.map((candidate) => candidate.row),
+                      )
+                    }
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPreviewRows([])}
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                <div className="space-y-2">
+                  {screenshotPreview.candidates.map((candidate) => {
+                    const isSelected = selectedPreviewRows.includes(candidate.row);
+                    const routeLabel = `${candidate.pickupCountry}, ${candidate.pickupPostcode}, ${candidate.pickupCity} → ${candidate.deliveryCountry}, ${candidate.deliveryPostcode}, ${candidate.deliveryCity}`;
+                    const transportChips = [
+                      candidate.bodySize,
+                      candidate.bodyTypeText,
+                      candidate.freightMode,
+                    ].filter((chip): chip is string => Boolean(chip && chip.trim()));
+
+                    return (
+                      <label
+                        key={`preview-row-${candidate.row}`}
+                        className={`block cursor-pointer rounded border px-3 py-2 ${
+                          isSelected
+                            ? 'border-blue-300 bg-blue-50'
+                            : 'border-slate-200 bg-white hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleTogglePreviewRow(candidate.row)}
+                              />
+                              <p className="truncate text-xs font-semibold text-slate-900">
+                                Row {candidate.row} • {candidate.brokerName || 'Broker n/a'}
+                              </p>
+                            </div>
+                            <p className="mt-1 truncate text-xs text-slate-700">{routeLabel}</p>
+                            <p className="mt-1 text-[11px] text-slate-600">
+                              Pickup: {formatPreviewDateTime(candidate.pickupDateTimeIso)} •
+                              Delivery: {formatPreviewDateTime(candidate.deliveryDateTimeIso)}
+                            </p>
+                            {transportChips.length > 0 && (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {transportChips.map((chip) => (
+                                  <span
+                                    key={`${candidate.row}-${chip}`}
+                                    className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700"
+                                  >
+                                    {chip}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {candidate.additionalDescription && (
+                              <p className="mt-1 text-[11px] text-slate-600">
+                                {candidate.additionalDescription}
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-right text-xs text-slate-700">
+                            <p className="font-semibold text-slate-900">
+                              {formatPreviewMoney(candidate.priceAmount, candidate.currency)}
+                            </p>
+                            <p className="mt-0.5">
+                              {candidate.weightTons !== null && Number.isFinite(candidate.weightTons)
+                                ? `${candidate.weightTons.toFixed(3)} t`
+                                : '—'}
+                            </p>
+                            <p className="mt-0.5">
+                              {candidate.distanceKm !== null && Number.isFinite(candidate.distanceKm)
+                                ? `${Math.round(candidate.distanceKm)} km`
+                                : '—'}
+                            </p>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                {screenshotPreview.warnings.length > 0 && (
+                  <div className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-amber-800">Warnings</p>
+                    <ul className="mt-1 space-y-1 text-[11px] text-amber-700">
+                      {screenshotPreview.warnings.map((warning, index) => (
+                        <li key={`preview-warning-${index}`}>• {warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+                <button
+                  type="button"
+                  onClick={() => setScreenshotPreview(null)}
+                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  disabled={isSubmitting}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCommitScreenshotPreview()}
+                  className="inline-flex items-center gap-2 rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSubmitting || selectedPreviewRows.length === 0}
+                >
+                  {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  Add Selected Routes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {duplicatePopup && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/45 p-4">
+            <div className="w-full max-w-2xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <h3 className="text-sm font-semibold text-slate-900">Duplicates Detected</h3>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  {duplicatePopup.count} duplicate load(s) were skipped.
+                </p>
+              </div>
+              <div className="max-h-[52vh] overflow-y-auto px-4 py-3">
+                <div className="space-y-2">
+                  {duplicatePopup.duplicates.map((duplicate, index) => {
+                    const weightLabel =
+                      typeof duplicate.weightTons === 'number' && Number.isFinite(duplicate.weightTons)
+                        ? `${duplicate.weightTons.toFixed(3)} t`
+                        : 'Weight n/a';
+                    const existingRef = duplicate.existingReferenceNumber || '—';
+                    return (
+                      <div
+                        key={`duplicate-${duplicate.row}-${index}`}
+                        className="rounded border border-amber-200 bg-amber-50 px-3 py-2"
+                      >
+                        <p className="text-xs font-semibold text-amber-800">
+                          Row {duplicate.row} • {duplicate.pickupCity} → {duplicate.deliveryCity}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-amber-700">
+                          {duplicate.brokerName || 'Broker n/a'} • {weightLabel}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-amber-700">
+                          Existing Ref: {existingRef}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex items-center justify-end border-t border-slate-200 px-4 py-3">
+                <button
+                  type="button"
+                  onClick={handleCloseDuplicatePopup}
+                  className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

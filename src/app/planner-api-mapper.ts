@@ -231,12 +231,19 @@ export const mapApiLoadToPlannerLoad = (apiLoad: Load): PlannerLoad => {
     y: 100,
     status,
     originAddress: originAddressLine,
+    originCountry: apiLoad.pickupCountry,
     destAddress: destAddressLine,
+    destCountry: apiLoad.deliveryCountry,
     originTranseuLink: apiLoad.originTranseuLink ?? undefined,
     destTranseuLink: apiLoad.destTranseuLink ?? undefined,
     contactPerson: brokerContactName || (apiLoad.contactPerson ?? undefined),
     phone: brokerContactPhone || (apiLoad.contactPhone ?? undefined),
     email: brokerContactEmail || (apiLoad.contactEmail ?? undefined),
+    brokerTransEuRating: apiLoad.broker?.transEuRating ?? undefined,
+    brokerTransEuReviewCount: apiLoad.broker?.transEuReviewCount ?? undefined,
+    brokerTransEuPaidOnTime: apiLoad.broker?.transEuPaidOnTime ?? undefined,
+    brokerTransEuPaidWithDelay: apiLoad.broker?.transEuPaidWithDelay ?? undefined,
+    brokerTransEuPaymentIssues: apiLoad.broker?.transEuPaymentIssues ?? undefined,
     paymentTerms:
       apiLoad.paymentTermDays !== null && apiLoad.paymentTermDays !== undefined
         ? String(apiLoad.paymentTermDays)
@@ -283,8 +290,11 @@ const mapStopFromApi = (load: Load, stopType: StopType): LoadStop | null => {
 export interface PlannerSidebarSeedStop {
   loadId: string;
   type: 'pickup' | 'delivery';
+  country: string;
   city: string;
   postcode: string;
+  lat?: number | null;
+  lng?: number | null;
   eta: string;
   pallets: number;
   weight: number;
@@ -310,8 +320,11 @@ export const buildSidebarSeedStops = (
       {
         loadId: plannerLoad.id,
         type: 'pickup' as const,
+        country: pickupStop?.country ?? plannerLoad.originCountry ?? apiLoad.pickupCountry,
         city: pickupStop?.city ?? plannerLoad.originCity,
         postcode: pickupStop?.postcode ?? fallbackPickupPostcode,
+        lat: pickupStop?.lat ?? null,
+        lng: pickupStop?.lng ?? null,
         eta: pickupStop?.dateFrom ?? plannerLoad.pickupWindowStart ?? plannerLoad.pickupDate,
         pallets: pickupStop?.pallets ?? plannerLoad.pallets,
         weight: plannerLoad.weight,
@@ -320,8 +333,11 @@ export const buildSidebarSeedStops = (
       {
         loadId: plannerLoad.id,
         type: 'delivery' as const,
+        country: deliveryStop?.country ?? plannerLoad.destCountry ?? apiLoad.deliveryCountry,
         city: deliveryStop?.city ?? plannerLoad.destCity,
         postcode: deliveryStop?.postcode ?? fallbackDeliveryPostcode,
+        lat: deliveryStop?.lat ?? null,
+        lng: deliveryStop?.lng ?? null,
         eta: deliveryStop?.dateFrom ?? plannerLoad.deliveryWindowStart ?? plannerLoad.deliveryDate,
         pallets: deliveryStop?.pallets ?? plannerLoad.pallets,
         weight: plannerLoad.weight,
@@ -366,7 +382,7 @@ export const buildLoadUpsertDto = (load: PlannerLoad): CreateLoadDto => {
       address: origin.fullAddress,
       city: origin.city,
       postcode: origin.postcode,
-      country: DEFAULT_COUNTRY,
+      country: load.originCountry || DEFAULT_COUNTRY,
       dateFrom: pickupDateFrom,
       ...(pickupDateTo ? { dateTo: pickupDateTo } : {}),
       pallets: Math.max(0, Math.round(load.pallets)),
@@ -381,7 +397,10 @@ export const buildLoadUpsertDto = (load: PlannerLoad): CreateLoadDto => {
         address: parsed.fullAddress,
         city: parsed.city,
         postcode: parsed.postcode,
-        country: DEFAULT_COUNTRY,
+        country:
+          extraStop.action === 'pickup'
+            ? load.originCountry || DEFAULT_COUNTRY
+            : load.destCountry || DEFAULT_COUNTRY,
         dateFrom,
         pallets: extraStop.pallets,
         orderIndex: index + 1,
@@ -392,7 +411,7 @@ export const buildLoadUpsertDto = (load: PlannerLoad): CreateLoadDto => {
       address: destination.fullAddress,
       city: destination.city,
       postcode: destination.postcode,
-      country: DEFAULT_COUNTRY,
+      country: load.destCountry || DEFAULT_COUNTRY,
       dateFrom: deliveryDateFrom,
       ...(deliveryDateTo ? { dateTo: deliveryDateTo } : {}),
       pallets: Math.max(0, Math.round(load.pallets)),
@@ -408,13 +427,13 @@ export const buildLoadUpsertDto = (load: PlannerLoad): CreateLoadDto => {
     pickupAddress: origin.fullAddress,
     pickupCity: origin.city,
     pickupPostcode: origin.postcode || DEFAULT_POSTCODE,
-    pickupCountry: DEFAULT_COUNTRY,
+    pickupCountry: load.originCountry || DEFAULT_COUNTRY,
     pickupDateFrom,
     ...(pickupDateTo ? { pickupDateTo } : {}),
     deliveryAddress: destination.fullAddress,
     deliveryCity: destination.city,
     deliveryPostcode: destination.postcode || DEFAULT_POSTCODE,
-    deliveryCountry: DEFAULT_COUNTRY,
+    deliveryCountry: load.destCountry || DEFAULT_COUNTRY,
     deliveryDateFrom,
     ...(deliveryDateTo ? { deliveryDateTo } : {}),
     agreedPrice: Number(safePrice.toFixed(2)),

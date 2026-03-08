@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, TrendingUp, Clock, Fuel, Euro } from 'lucide-react';
 import { useState } from 'react';
 
-interface RouteStats {
+export interface RouteStats {
   totalKm: number;
   totalTime: string;
   estimatedFuel: number;
@@ -13,22 +13,59 @@ interface RouteStats {
 }
 
 interface RouteComparisonProps {
-  currentRoute: RouteStats;      // TAKEN loads only
-  toggledOnRoute: RouteStats;    // TAKEN + toggled ON loads
-  everythingRoute: RouteStats;   // ALL loads (TAKEN + ON + OFF)
-  hasToggledLoads: boolean;      // Whether any loads are toggled ON
+  currentRoute: RouteStats;
+  plannedRoute: RouteStats;
+  previousRoute?: {
+    currentRoute: RouteStats;
+    plannedRoute: RouteStats;
+  } | null;
 }
 
 export function RouteComparison({ 
   currentRoute, 
-  toggledOnRoute, 
-  everythingRoute,
-  hasToggledLoads 
+  plannedRoute, 
+  previousRoute = null,
 }: RouteComparisonProps) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const plannedPrevious = previousRoute?.plannedRoute;
+
+  const formatSignedDelta = (value: number, decimals = 0): string => {
+    const rounded =
+      decimals > 0 ? Number(value.toFixed(decimals)) : Math.round(value);
+    if (rounded === 0) return '0';
+    const absoluteText =
+      decimals > 0
+        ? Math.abs(rounded).toFixed(decimals).replace(/\.?0+$/, '')
+        : String(Math.abs(rounded));
+    return `${rounded > 0 ? '+' : '-'}${absoluteText}`;
+  };
+
+  const renderDelta = (
+    currentValue: number,
+    previousValue: number | undefined,
+    options?: {
+      prefix?: string;
+      decimals?: number;
+      className?: string;
+    },
+  ) => {
+    if (typeof previousValue !== 'number' || Number.isNaN(previousValue)) {
+      return null;
+    }
+    const delta = currentValue - previousValue;
+    const prefix = options?.prefix ?? '';
+    const decimals = options?.decimals ?? 0;
+    const className = options?.className ?? 'text-[10px] font-medium';
+    return (
+      <span className={className}>
+        ({prefix}
+        {formatSignedDelta(delta, decimals)})
+      </span>
+    );
+  };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
+    <div className="flex flex-col bg-white">
       {/* Header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
@@ -36,11 +73,6 @@ export function RouteComparison({
       >
         <div className="flex items-center gap-3">
           <h3 className="font-semibold text-sm text-gray-900">Route Comparison</h3>
-          {hasToggledLoads && (
-            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium">
-              {toggledOnRoute.stopCount / 2} loads planned
-            </span>
-          )}
         </div>
         {isExpanded ? (
           <ChevronDown className="w-4 h-4 text-gray-500" />
@@ -51,8 +83,76 @@ export function RouteComparison({
 
       {/* Expandable Content - Horizontal Layout */}
       {isExpanded && (
-        <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
-          <div className="grid min-w-[980px] grid-cols-3 gap-4">
+        <div className="px-6 py-4">
+          <div className="grid grid-cols-1 gap-4">
+            {/* Planned Route - TAKEN + NEGOTIATING */}
+            <div className="bg-blue-50 border-2 border-blue-300 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                  Planned Route
+                </h4>
+                <span className="text-xs text-blue-600 font-medium">
+                  {plannedRoute.stopCount} stops
+                </span>
+              </div>
+              
+              {/* Main Metrics */}
+              <div className="grid grid-cols-2 gap-3 text-xs mb-3 pb-3 border-b border-blue-300">
+                <div className="flex items-center gap-1.5">
+                  <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">{plannedRoute.totalKm} km</span>
+                  {renderDelta(plannedRoute.totalKm, plannedPrevious?.totalKm, {
+                    className: 'text-blue-600 text-[10px] font-medium',
+                  })}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">{plannedRoute.totalTime}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Fuel className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">{plannedRoute.estimatedFuel}L</span>
+                  {renderDelta(plannedRoute.estimatedFuel, plannedPrevious?.estimatedFuel, {
+                    className: 'text-blue-600 text-[10px] font-medium',
+                  })}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Euro className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-blue-900 font-semibold">€{plannedRoute.estimatedMargin}</span>
+                  {renderDelta(plannedRoute.estimatedMargin, plannedPrevious?.estimatedMargin, {
+                    prefix: '€',
+                    decimals: 2,
+                    className: 'text-green-600 text-[10px] font-semibold',
+                  })}
+                </div>
+              </div>
+              
+              {/* Bottom horizontal metrics */}
+              <div className="flex items-center justify-between text-[11px] text-blue-600 gap-3">
+                <div className="flex flex-col">
+                  <span className="font-medium text-blue-600">Fuel Cost</span>
+                  <span className="text-blue-900 font-semibold">€{plannedRoute.fuelCost}</span>
+                  {renderDelta(plannedRoute.fuelCost, plannedPrevious?.fuelCost, {
+                    prefix: '€',
+                    className: 'text-blue-600 text-[10px]',
+                  })}
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-medium text-blue-600">Revenue</span>
+                  <span className="text-blue-900 font-semibold">€{plannedRoute.totalRevenue}</span>
+                  {renderDelta(plannedRoute.totalRevenue, plannedPrevious?.totalRevenue, {
+                    prefix: '€',
+                    decimals: 2,
+                    className: 'text-green-600 font-semibold text-[10px]',
+                  })}
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-medium text-blue-600">€/km</span>
+                  <span className="text-blue-900 font-semibold">{plannedRoute.pricePerKm.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
             {/* Current Route - TAKEN only */}
             <div className="bg-gray-50 border border-gray-200 p-4">
               <div className="flex items-center justify-between mb-3">
@@ -97,124 +197,6 @@ export function RouteComparison({
                 <div className="flex flex-col">
                   <span className="font-medium text-gray-500">€/km</span>
                   <span className="text-gray-900 font-semibold">{currentRoute.pricePerKm.toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Planned Route - TAKEN + toggled ON */}
-            <div className="bg-blue-50 border-2 border-blue-300 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
-                  With Toggle ON
-                </h4>
-                <span className="text-xs text-blue-600 font-medium">
-                  {toggledOnRoute.stopCount} stops
-                </span>
-              </div>
-              
-              {/* Main Metrics */}
-              <div className="grid grid-cols-2 gap-3 text-xs mb-3 pb-3 border-b border-blue-300">
-                <div className="flex items-center gap-1.5">
-                  <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-blue-900 font-semibold">{toggledOnRoute.totalKm} km</span>
-                  <span className="text-blue-600 text-[10px] font-medium">
-                    (+{toggledOnRoute.totalKm - currentRoute.totalKm})
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-blue-900 font-semibold">{toggledOnRoute.totalTime}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Fuel className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-blue-900 font-semibold">{toggledOnRoute.estimatedFuel}L</span>
-                  <span className="text-blue-600 text-[10px] font-medium">
-                    (+{toggledOnRoute.estimatedFuel - currentRoute.estimatedFuel})
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Euro className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-blue-900 font-semibold">€{toggledOnRoute.estimatedMargin}</span>
-                  <span className="text-green-600 text-[10px] font-semibold">
-                    (+€{toggledOnRoute.estimatedMargin - currentRoute.estimatedMargin})
-                  </span>
-                </div>
-              </div>
-              
-              {/* Bottom horizontal metrics */}
-              <div className="flex items-center justify-between text-[11px] text-blue-600 gap-3">
-                <div className="flex flex-col">
-                  <span className="font-medium text-blue-600">Fuel Cost</span>
-                  <span className="text-blue-900 font-semibold">€{toggledOnRoute.fuelCost}</span>
-                  <span className="text-blue-600 text-[10px]">(+€{toggledOnRoute.fuelCost - currentRoute.fuelCost})</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="font-medium text-blue-600">Revenue</span>
-                  <span className="text-blue-900 font-semibold">€{toggledOnRoute.totalRevenue}</span>
-                  <span className="text-green-600 font-semibold text-[10px]">(+€{toggledOnRoute.totalRevenue - currentRoute.totalRevenue})</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="font-medium text-blue-600">€/km</span>
-                  <span className="text-blue-900 font-semibold">{toggledOnRoute.pricePerKm.toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Everything - ALL loads */}
-            <div className="bg-purple-50 border border-purple-300 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
-                  Everything
-                </h4>
-                <span className="text-xs text-purple-600 font-medium">
-                  {everythingRoute.stopCount} stops
-                </span>
-              </div>
-              
-              {/* Main Metrics */}
-              <div className="grid grid-cols-2 gap-3 text-xs mb-3 pb-3 border-b border-purple-300">
-                <div className="flex items-center gap-1.5">
-                  <TrendingUp className="w-3.5 h-3.5 text-purple-500" />
-                  <span className="text-purple-900 font-semibold">{everythingRoute.totalKm} km</span>
-                  <span className="text-purple-600 text-[10px] font-medium">
-                    (+{everythingRoute.totalKm - currentRoute.totalKm})
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-purple-500" />
-                  <span className="text-purple-900 font-semibold">{everythingRoute.totalTime}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Fuel className="w-3.5 h-3.5 text-purple-500" />
-                  <span className="text-purple-900 font-semibold">{everythingRoute.estimatedFuel}L</span>
-                  <span className="text-purple-600 text-[10px] font-medium">
-                    (+{everythingRoute.estimatedFuel - currentRoute.estimatedFuel})
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Euro className="w-3.5 h-3.5 text-purple-500" />
-                  <span className="text-purple-900 font-semibold">€{everythingRoute.estimatedMargin}</span>
-                  <span className="text-green-600 text-[10px] font-semibold">
-                    (+€{everythingRoute.estimatedMargin - currentRoute.estimatedMargin})
-                  </span>
-                </div>
-              </div>
-              
-              {/* Bottom horizontal metrics */}
-              <div className="flex items-center justify-between text-[11px] text-purple-600 gap-3">
-                <div className="flex flex-col">
-                  <span className="font-medium text-purple-600">Fuel Cost</span>
-                  <span className="text-purple-900 font-semibold">€{everythingRoute.fuelCost}</span>
-                  <span className="text-purple-600 text-[10px]">(+€{everythingRoute.fuelCost - currentRoute.fuelCost})</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="font-medium text-purple-600">Revenue</span>
-                  <span className="text-purple-900 font-semibold">€{everythingRoute.totalRevenue}</span>
-                  <span className="text-green-600 font-semibold text-[10px]">(+€{everythingRoute.totalRevenue - currentRoute.totalRevenue})</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="font-medium text-purple-600">€/km</span>
-                  <span className="text-purple-900 font-semibold">{everythingRoute.pricePerKm.toFixed(2)}</span>
                 </div>
               </div>
             </div>

@@ -8,6 +8,9 @@ export interface SidebarStop {
   type: 'pickup' | 'delivery';
   city: string;
   postcode: string;
+  countryCode?: string;
+  lat?: number | null;
+  lng?: number | null;
   eta: string;
   etaDate?: string;
   etaTime?: string;
@@ -31,12 +34,10 @@ interface SidebarStopCardProps {
   index: number;
   draggingIndex: number | null;
   isSelected: boolean;
-  isInCargo?: boolean; // Whether this load is loaded in cargo planner
   onSelect: (id: string, multiSelect: boolean) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onDraggingIndexChange: (index: number | null) => void;
   onTranseuAction?: (stopId: string, shouldEdit: boolean) => void;
-  onToggleCargo?: (stopId: string) => void; // Toggle cargo visibility
 }
 
 const hexToRgba = (hex: string, alpha: number): string => {
@@ -65,19 +66,24 @@ export function SidebarStopCard({
   index,
   draggingIndex,
   isSelected,
-  isInCargo,
   onSelect,
   onReorder,
   onDraggingIndexChange,
   onTranseuAction,
-  onToggleCargo,
 }: SidebarStopCardProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const itemRef = useRef<HTMLDivElement>(null);
+  const didDragRef = useRef(false);
   const locationLine = stop.locationLine ?? `DE, ${stop.postcode}, ${stop.city}`;
   const etaDate = stop.etaDate ?? '—';
   const etaTime = stop.etaTime ?? '—';
+  const brokerageLabelRaw = (stop.brokerage ?? '').trim();
+  const brokerageLabel = brokerageLabelRaw
+    ? brokerageLabelRaw.length > 24
+      ? `${brokerageLabelRaw.slice(0, 24)}...`
+      : brokerageLabelRaw
+    : 'Brokerage not set';
   const brokerBadgeStyle = {
     backgroundColor: hexToRgba(stop.color, 0.12),
     borderColor: hexToRgba(stop.color, 0.3),
@@ -94,14 +100,20 @@ export function SidebarStopCard({
   };
 
   const handleClick = (e: React.MouseEvent) => {
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
     const multiSelect = e.ctrlKey || e.shiftKey;
     onSelect(stop.id, multiSelect);
   };
 
   const handleDragStart = (e: React.DragEvent) => {
+    didDragRef.current = true;
     setIsDragging(true);
     onDraggingIndexChange(index);
     e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-sidebar-stop-index', String(index));
     e.dataTransfer.setData('text/plain', stop.id);
   };
 
@@ -109,26 +121,15 @@ export function SidebarStopCard({
     setIsDragging(false);
     setIsDragOver(false);
     onDraggingIndexChange(null);
+    window.setTimeout(() => {
+      didDragRef.current = false;
+    }, 0);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setIsDragOver(true);
-
-    if (draggingIndex === null || draggingIndex === index) return;
-    const bounds = itemRef.current?.getBoundingClientRect();
-    if (!bounds) return;
-
-    const midY = (bounds.bottom - bounds.top) / 2;
-    const pointerY = e.clientY - bounds.top;
-
-    // Reorder only after crossing the midpoint to avoid jumpiness.
-    if (draggingIndex < index && pointerY < midY) return;
-    if (draggingIndex > index && pointerY > midY) return;
-
-    onReorder(draggingIndex, index);
-    onDraggingIndexChange(index);
   };
 
   const handleDragLeave = () => {
@@ -138,6 +139,14 @@ export function SidebarStopCard({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
+    const transferredIndex = Number(e.dataTransfer.getData('application/x-sidebar-stop-index'));
+    const sourceIndex = Number.isInteger(transferredIndex)
+      ? transferredIndex
+      : draggingIndex;
+    if (sourceIndex !== null && sourceIndex >= 0 && sourceIndex !== index) {
+      onReorder(sourceIndex, index);
+    }
+    onDraggingIndexChange(null);
   };
 
   return (
@@ -150,7 +159,7 @@ export function SidebarStopCard({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onClick={handleClick}
-      className={`relative bg-white border-b border-gray-200 cursor-move transition-[background-color,box-shadow,opacity,transform] ${
+      className={`relative select-none bg-white border-b border-gray-200 cursor-move transition-[background-color,box-shadow,opacity,transform] ${
         isDragging ? 'opacity-40 scale-95' : ''
       } ${isDragOver && draggingIndex !== index ? 'bg-blue-50 shadow-[inset_0_0_0_2px_rgba(147,197,253,1)]' : ''} ${
         isSelected ? 'bg-blue-100 shadow-[inset_0_0_0_2px_rgba(59,130,246,1)]' : ''
@@ -159,26 +168,6 @@ export function SidebarStopCard({
         borderLeft: `4px solid ${stop.color}`,
       }}
     >
-      {/* Toggle Button - Centered vertically on right side */}
-      {onToggleCargo && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleCargo(stop.id);
-          }}
-          className={`absolute right-3 top-1/2 -translate-y-1/2 w-8 h-4 rounded-full transition-colors z-10 ${
-            isInCargo ? 'bg-blue-500' : 'bg-gray-300'
-          }`}
-          title={isInCargo ? "Hide from cargo planner" : "Show in cargo planner"}
-        >
-          <div 
-            className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow-md transition-transform ${
-              isInCargo ? 'translate-x-4' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-      )}
-
       <div className="px-3 py-2">
         <div className="flex items-start gap-2">
           <GripVertical className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
@@ -201,7 +190,7 @@ export function SidebarStopCard({
                   ) : (
                     <ArrowDown className="h-3.5 w-3.5 shrink-0" />
                   )}
-                  <span className="truncate">{stop.brokerage || 'Brokerage not set'}</span>
+                  <span className="truncate">{brokerageLabel}</span>
                 </span>
               </div>
               
